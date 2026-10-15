@@ -1,3 +1,5 @@
 #use io
+#use @term
 
-io::out $ "Hello from vade!"
+io::out $ term::hello!
+
