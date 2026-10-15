@@ -1,0 +1,130 @@
+// vade/src/fs.dva — File system directory scanning, statting, and entry sorting
+
+#use libc
+#use str
+
+#public
+   #type Entry (
+      name: String,
+      is_dir: <>,
+      size: Int,
+      fmt_size: String
+   )
+
+   format_size: Int, <> => String
+   format_size = sz, is_d =>
+      is_d | "   DIR"
+         |
+            sz < 1024
+               | str::from_int(sz) + " B"
+               |
+                  kb = sz / 1024
+                  kb < 1024
+                     | str::from_int(kb) + " KB"
+                     |
+                        mb = kb / 1024
+                        str::from_int(mb) + " MB"
+
+   join_path: String, String => String
+   join_path = p1, p2 =>
+      p1 == "" || p1 == "." | p2
+         |
+            p1 == "/" | "/" + p2
+               |
+                  p1(-1..) == "/" | p1 + p2 | p1 + "/" + p2
+
+   parent_path: String => String
+   parent_path = p =>
+      p == "" || p == "." || p == "/" | ".."
+         |
+            len = ?p
+            // Find last slash
+            last_slash' = -1
+            len @ i =>
+               idx = len - 1 - i
+               p(idx) == '/' && last_slash' < 0 | last_slash' = idx
+            last_slash' < 0
+               | "."
+               |
+                  last_slash' == 0
+                     | "/"
+                     | p(..last_slash')
+
+   read_dir_entry: Addr => (String, Int)
+   read_dir_entry = ent =>
+      d_type = Int(@[ent + 18 u8])
+      raw = ent + 19
+      b = {256}
+      0.. @ i =>
+         c = @[raw + i i8]
+         c == 0i8 | -->
+         b += c
+      (+b, d_type)
+
+   // List all entries in dir_path, sorted with directories first then alphabetically
+   list_dir: String => (Entry){}
+   list_dir = dir_path =>
+      res = (Entry){}
+      dp = libc::opendir(dir_path)
+      dp == 0 | --| res
+
+      dirs = (Entry){}
+      files = (Entry){}
+      sbuf = {144}
+
+      0.. @ step =>
+         ent = libc::readdir(dp)
+         ent == 0 | -->
+         info = read_dir_entry(ent)
+         name = info.0
+         d_type = info.1
+         // Skip "."
+         name == "." | --^
+         // Only show ".." if we have parent
+         is_parent = name == ".."
+         is_d = d_type == 4 || is_parent
+
+         // Stat for size if not parent
+         full_path = join_path(dir_path, name)
+         size' = 0
+         !is_parent |
+            st_res = libc::stat(full_path, &sbuf)
+            st_res == 0 |
+               size' = Int(@[&sbuf + 48 i64])
+               // If d_type was 0 (unknown on some filesystems), inspect st_mode
+               st_mode = Int(@[&sbuf + 24 u32])
+               (st_mode .&. 0xF000) == 0x4000 | is_d = <+>
+
+         fmt_sz = format_size(size', is_d)
+         entry = Entry((name, is_d, size', fmt_sz))
+
+         is_d | dirs += entry | files += entry
+
+      libc::closedir(dp)
+
+      // Insertion sort dirs
+      nd = ?dirs
+      nd @ i =>
+         (nd - 1) @ j =>
+            d1 = dirs(j)!!
+            d2 = dirs(j + 1)!!
+            // Keep ".." at very top
+            d1.name != ".." && (d2.name == ".." || str::cmp(d1.name, d2.name) > 0) |
+               dirs(j) = d2
+               dirs(j + 1) = d1
+
+      // Insertion sort files
+      nf = ?files
+      nf @ i =>
+         (nf - 1) @ j =>
+            f1 = files(j)!!
+            f2 = files(j + 1)!!
+            str::cmp(f1.name, f2.name) > 0 |
+               files(j) = f2
+               files(j + 1) = f1
+
+      // Merge dirs + files into res
+      dirs @ d => res += d
+      files @ f => res += f
+      res
+

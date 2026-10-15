@@ -1,5 +1,116 @@
+// vade/src/main.dva — Main terminal file manager entry point and interactive event loop
+
 #use io
 #use @term
+#use "vade"
+#use "fs"
 
-io::out $ term::hello!
+t = term::init!
+term::enable_raw(t)
+term::enable_mouse(t)
+term::hide_cursor(t)
 
+st = vade::new_state(".")
+vade::draw(t, st)
+
+0.. @
+   ev = term::poll_event(t, 50)
+   visible_h = t.rows - 6
+   visible_h < 1 | visible_h = 1
+
+   ev.kind == term::EV_KEY |
+      ev.code == term::KEY_CHAR |
+         ev.ch == 'q' | -->
+         ev.ch == 'j' |
+            vade::move_cursor(st, 1, visible_h)
+            vade::draw(t, st)
+         ev.ch == 'k' |
+            vade::move_cursor(st, -1, visible_h)
+            vade::draw(t, st)
+         ev.ch == 'l' |
+            n = ?st.entries
+            n > 0 |
+               ent = st.entries(st.selected)!!
+               ent.is_dir |
+                  new_path = ent.name == ".."
+                     | fs::parent_path(st.path)
+                     | fs::join_path(st.path, ent.name)
+                  vade::set_dir(st, new_path)
+                  vade::draw(t, st)
+         ev.ch == 'h' |
+            new_path = fs::parent_path(st.path)
+            vade::set_dir(st, new_path)
+            vade::draw(t, st)
+         ev.ch !< 'a' && ev.ch !> 'z' |
+            vade::jump_to_letter(st, ev.ch, visible_h)
+            vade::draw(t, st)
+
+      ev.code == term::KEY_UP |
+         vade::move_cursor(st, -1, visible_h)
+         vade::draw(t, st)
+
+      ev.code == term::KEY_DOWN |
+         vade::move_cursor(st, 1, visible_h)
+         vade::draw(t, st)
+
+      ev.code == term::KEY_PAGE_UP |
+         vade::move_cursor(st, -visible_h, visible_h)
+         vade::draw(t, st)
+
+      ev.code == term::KEY_PAGE_DOWN |
+         vade::move_cursor(st, visible_h, visible_h)
+         vade::draw(t, st)
+
+      ev.code == term::KEY_HOME |
+         vade::move_cursor(st, -100000, visible_h)
+         vade::draw(t, st)
+
+      ev.code == term::KEY_END |
+         vade::move_cursor(st, 100000, visible_h)
+         vade::draw(t, st)
+
+      ev.code == term::KEY_ENTER || ev.code == term::KEY_RIGHT |
+         n = ?st.entries
+         n > 0 |
+            ent = st.entries(st.selected)!!
+            ent.is_dir |
+               new_path = ent.name == ".."
+                  | fs::parent_path(st.path)
+                  | fs::join_path(st.path, ent.name)
+               vade::set_dir(st, new_path)
+               vade::draw(t, st)
+
+      ev.code == term::KEY_BACKSPACE || ev.code == term::KEY_LEFT |
+         new_path = fs::parent_path(st.path)
+         vade::set_dir(st, new_path)
+         vade::draw(t, st)
+
+      ev.code == term::KEY_ESC | -->
+
+   ev.kind == term::EV_MOUSE |
+      ev.mouse_act == term::MOUSE_SCROLL_UP |
+         vade::move_cursor(st, -2, visible_h)
+         vade::draw(t, st)
+      ev.mouse_act == term::MOUSE_SCROLL_DOWN |
+         vade::move_cursor(st, 2, visible_h)
+         vade::draw(t, st)
+      ev.mouse_act == term::MOUSE_PRESS |
+         // Click within file list to jump to clicked row
+         click_y = ev.y - 1
+         list_r = 3
+         list_h = t.rows - 6
+         click_y !< list_r && click_y < (list_r + list_h) |
+            row_offset = click_y - list_r
+            clicked_idx = st.scroll + row_offset
+            clicked_idx < ?st.entries |
+               st.selected = clicked_idx
+               vade::draw(t, st)
+
+   ev.kind == term::EV_RESIZE |
+      vade::draw(t, st)
+
+term::disable_mouse(t)
+term::disable_raw(t)
+term::show_cursor(t)
+term::shutdown(t)
+io::out("vade exited cleanly.\n")

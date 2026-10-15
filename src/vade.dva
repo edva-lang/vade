@@ -1,4 +1,152 @@
-#public
+// vade/src/vade.dva — Core TUI state, layout, and file list renderer
 
-hello: () => String
-hello = !=> "Hello from vade!"
+#use str
+#use @term
+#use "fs"
+
+#public
+   #type State (
+      path: String,
+      entries: (fs::Entry){},
+      selected: Int,
+      scroll: Int,
+      pal: term::Palette
+   )
+
+   new_state: String => State
+   new_state = dir_path =>
+      ents = fs::list_dir(dir_path)
+      State((dir_path, ents, 0, 0, term::TOKYONIGHT))
+
+   set_dir: State, String => ()
+   set_dir = st, new_p =>
+      st.path = new_p
+      st.entries = fs::list_dir(new_p)
+      st.selected = 0
+      st.scroll = 0
+
+   move_cursor: State, Int, Int => ()
+   move_cursor = st, delta, max_visible =>
+      n = ?st.entries
+      n == 0 | --|
+      new_sel = st.selected + delta
+      new_sel < 0 | new_sel = 0
+      new_sel !< n | new_sel = n - 1
+      st.selected = new_sel
+
+      // Adjust scroll window
+      st.selected < st.scroll | st.scroll = st.selected
+      st.selected !< (st.scroll + max_visible) |
+         st.scroll = st.selected - max_visible + 1
+
+   jump_to_letter: State, Int, Int => ()
+   jump_to_letter = st, letter, max_visible =>
+      letter !< 'a' && letter !> 'z' |
+         idx = letter - 'a'
+         idx < ?st.entries |
+            st.selected = idx
+            st.selected < st.scroll | st.scroll = st.selected
+            st.selected !< (st.scroll + max_visible) |
+               st.scroll = st.selected - max_visible + 1
+
+   draw: term::Term, State => ()
+   draw = tm, st =>
+      term::clear(tm)
+      r = tm.rows
+      c = tm.cols
+      pal = st.pal
+
+      // Outer window box with rounded corners
+      box_title = " vade — " + st.path + " "
+      term::draw_titled_box(tm, 0, 0, r, c, term::BORDER_ROUNDED, box_title, pal.border, pal.bg, pal.cyan)
+      term::set_title(tm, "vade: " + st.path)
+
+      // Header summary row
+      n_items = ?st.entries
+      summary = " " + str::from_int(n_items) + " items "
+      term::put_str(tm, 1, 3, summary, pal.muted, pal.bg, 0)
+      c > 60 |
+         term::put_str(tm, 1, c - 40, "[1:List 2:Short 3:Tree 4:Preview]", pal.muted, pal.bg, 0)
+
+      // Inner list area bounds
+      list_r = 3
+      list_c = 2
+      list_h = r - 6
+      list_w = c - 4
+      list_h < 1 || list_w < 10 | --|
+
+      // Inner file list box
+      term::draw_box(tm, list_r - 1, list_c - 1, list_h + 2, list_w + 2, term::BORDER_SINGLE, pal.border, pal.bg)
+
+      // Draw entries within viewable height
+      list_h @ row_idx =>
+         entry_idx = st.scroll + row_idx
+         entry_idx < n_items |
+            ent = st.entries(entry_idx)!!
+            is_active = entry_idx == st.selected
+            y = list_r + row_idx
+
+            // Background highlight for active row
+            row_bg = is_active | pal.surface | pal.bg
+            term::fill_rect(tm, y, list_c, 1, list_w, ' ', pal.fg, row_bg, 0)
+
+            // Fast-access letter indicator (e.g. "a ", "b ")
+            letter_str = entry_idx < 26
+               | "" + str::from_int(entry_idx + 1) + " "
+               | "  "
+            entry_idx < 26 |
+               let_buf = {3}
+               let_buf += ('a' + entry_idx)
+               let_buf += ' '
+               letter_str = +let_buf
+
+            letter_fg = is_active | pal.yellow | pal.cyan
+            term::put_str(tm, y, list_c + 1, letter_str, letter_fg, row_bg, term::ATTR_BOLD)
+
+            // Selection marker
+            marker = is_active | "▶ " | "  "
+            marker_fg = is_active | pal.yellow | pal.muted
+            term::put_str(tm, y, list_c + 4, marker, marker_fg, row_bg, term::ATTR_BOLD)
+
+            // Icon & File type color
+            name_x = list_c + 6
+            avail_name_w = list_w - 20
+            avail_name_w < 4 | avail_name_w = 4
+
+            ent.is_dir
+               |
+                  dir_name = ent.name + "/"
+                  term::put_str_clipped(tm, y, name_x, dir_name, avail_name_w, pal.blue, row_bg, term::ATTR_BOLD)
+               |
+                  // Highlight code and special extensions
+                  file_fg = ent.name(-4..) == ".dva"
+                     | pal.green
+                     | (ent.name(-3..) == ".md"
+                        | pal.purple
+                        | (ent.name(-4..) == ".ccl"
+                           | pal.orange
+                           | pal.fg))
+                  term::put_str_clipped(tm, y, name_x, ent.name, avail_name_w, file_fg, row_bg, 0)
+
+            // Size column right-aligned
+            sz_str = ent.fmt_size
+            sz_len = ?sz_str
+            sz_x = list_c + list_w - sz_len - 2
+            sz_x > name_x |
+               term::put_str(tm, y, sz_x, sz_str, pal.muted, row_bg, 0)
+
+      // Bottom Status / Help Bar
+      stat_r = r - 2
+      sel_info = n_items > 0
+         |
+            sel_ent = st.entries(st.selected)!!
+            "[" + str::from_int(st.selected + 1) + "/" + str::from_int(n_items) + "] " + sel_ent.name + " (" + str::from_int(sel_ent.size) + " B)"
+         | "Empty Directory"
+
+      term::put_str(tm, stat_r - 1, 2, sel_info, pal.yellow, pal.bg, term::ATTR_BOLD)
+
+      help = "[q] Exit  [↑/k, ↓/j] Navigate  [Enter/l] Open  [Backspace/h] Parent  [a-z] Jump"
+      term::put_str(tm, stat_r, 2, help, pal.muted, pal.bg, 0)
+
+      // Render diff to screen with zero flicker
+      term::render(tm)
