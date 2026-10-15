@@ -1,0 +1,4 @@
+#public
+
+hello: () => String
+hello = !=> "Hello from vade!"
