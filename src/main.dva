@@ -9,16 +9,15 @@
 
 edit_file: term::Term, vade::State, String => ()
 edit_file = t, st, full_path =>
-   term::disable_mouse(t)
    term::disable_raw(t)
    term::show_cursor(t)
-   io::out("\e[?1049l")
    libc::system("${EDITOR:-nano} \"" + full_path + "\"")
-   io::out("\e[?1049h")
    term::enable_raw(t)
    term::enable_mouse(t)
    term::hide_cursor(t)
+   term::force_redraw(t)
    st.entries = fs::list_dir(st.path)
+   vade::draw(t, st)
 
 run: () => ()
 run = !=>
