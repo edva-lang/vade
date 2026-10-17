@@ -1,54 +1,419 @@
-// vade/src/vade.dva — Core TUI state, layout, and file list renderer
+// vade/src/vade.dva — Core TUI state, 4-pane cross layout, and component renderers
 
 #use str
 #use @term
 #use "fs"
+#use "icon"
+#use "preview"
 
 #public
+   PROMPT_NONE   = 0
+   PROMPT_RENAME = 1
+   PROMPT_MKDIR  = 2
+   PROMPT_DELETE = 3
+
+   OP_NONE = 0
+   OP_COPY = 1
+   OP_MOVE = 2
+
+   #type CartItem (
+      name: String,
+      path: String,
+      is_dir: <>,
+      size: Int,
+      fmt_size: String
+   )
+
    #type State (
       path: String,
       entries: (fs::Entry){},
       selected: Int,
       scroll: Int,
-      pal: term::Palette
+      cart: (CartItem){},
+      show_icons: <>,
+      pal: term::Palette,
+      last_jump_key: Int,
+      preview_scroll: Int,
+      full_preview: <>,
+      show_help: <>,
+      op_mode: Int,
+      prompt_mode: Int,
+      input_buf: String,
+      status_msg: String
    )
 
    new_state: String => State
    new_state = dir_path =>
-      ents = fs::list_dir(dir_path)
-      State((dir_path, ents, 0, 0, term::TOKYONIGHT))
+      real_p = fs::resolve_path(dir_path)
+      ents = fs::list_dir(real_p)
+      State((
+         real_p,
+         ents,
+         0,
+         0,
+         (CartItem){},
+         <+>,
+         term::TOKYONIGHT,
+         -1,
+         0,
+         <->,
+         <->,
+         OP_NONE,
+         PROMPT_NONE,
+         "",
+         ""
+      ))
 
    set_dir: State, String => ()
    set_dir = st, new_p =>
-      st.path = new_p
-      st.entries = fs::list_dir(new_p)
+      real_p = fs::resolve_path(new_p)
+      st.path = real_p
+      st.entries = fs::list_dir(real_p)
       st.selected = 0
       st.scroll = 0
+      st.preview_scroll = 0
+      st.last_jump_key = -1
+
+   toggle_icons: State => ()
+   toggle_icons = st =>
+      st.show_icons = !st.show_icons
+
+   is_in_cart: State, String => <>
+   is_in_cart = st, name =>
+      found' = <->
+      st.cart @ item =>
+         item.name == name |
+            found' = <+>
+            -->
+      found'
+
+   toggle_cart: State => ()
+   toggle_cart = st =>
+      ?st.entries == 0 | --|
+      ent = st.entries(st.selected)!!
+      new_cart = (CartItem){}
+      was_in' = <->
+      st.cart @ item =>
+         item.name == ent.name && item.path == st.path
+            | was_in' = <+>
+            | new_cart += item
+
+      !was_in' |
+         full_p = fs::join_path(st.path, ent.name)
+         new_cart += CartItem((ent.name, full_p, ent.is_dir, ent.size, ent.fmt_size))
+
+      st.cart = new_cart
+      st.status_msg = ""
 
    move_cursor: State, Int, Int => ()
    move_cursor = st, delta, max_visible =>
       n = ?st.entries
       n == 0 | --|
-      new_sel = st.selected + delta
-      new_sel < 0 | new_sel = 0
-      new_sel !< n | new_sel = n - 1
-      st.selected = new_sel
+      st.selected = %clamp(st.selected + delta, 0, n - 1)
+      st.preview_scroll = 0
+      st.status_msg = ""
 
       // Adjust scroll window
       st.selected < st.scroll | st.scroll = st.selected
       st.selected !< (st.scroll + max_visible) |
          st.scroll = st.selected - max_visible + 1
 
-   jump_to_letter: State, Int, Int => ()
-   jump_to_letter = st, letter, max_visible =>
-      letter !< 'a' && letter !> 'z' |
-         idx = letter - 'a'
-         idx < ?st.entries |
-            st.selected = idx
-            st.selected < st.scroll | st.scroll = st.selected
-            st.selected !< (st.scroll + max_visible) |
-               st.scroll = st.selected - max_visible + 1
+   jump_shortcut: State, Int, Int => ()
+   jump_shortcut = st, key_idx, max_visible =>
+      n = ?st.entries
+      n == 0 | --|
 
+      // Double jump logic: if same letter is pressed twice, jump to 27th item (index + 26)
+      target_idx' = key_idx
+      st.last_jump_key == key_idx && (st.selected == key_idx || st.selected == key_idx + 26)
+         |
+            next_bank = st.selected + 26
+            target_idx' = next_bank < n | next_bank | st.selected
+         |
+            target_idx' = key_idx < n | key_idx | (n - 1)
+
+      st.last_jump_key = key_idx
+      target_idx' < n |
+         move_cursor(st, target_idx' - st.selected, max_visible)
+
+   file_color: fs::Entry, term::Palette => Int
+   file_color = ent, pal =>
+      ent.is_exec | --| pal.green
+      icon::file_ext(ent.name)
+         [".dva"] pal.green
+         [".md"] pal.purple
+         [".ccl"] pal.orange
+         | pal.fg
+
+   // Draw the 4-pane cross framing with embedded headers
+   draw_cross_frame: term::Term, Int, Int, Int, Int, State => ()
+   draw_cross_frame = tm, rows, cols, split_r, split_c, st =>
+      pal = st.pal
+      fg = pal.border
+      bg = pal.bg
+
+      // Outer corners
+      term::set_cell(tm, 0, 0, 0x250C, fg, bg, 0)                  // ┌
+      term::set_cell(tm, 0, cols - 1, 0x2510, fg, bg, 0)           // ┐
+      term::set_cell(tm, rows - 1, 0, 0x2514, fg, bg, 0)          // └
+      term::set_cell(tm, rows - 1, cols - 1, 0x2518, fg, bg, 0)   // ┘
+
+      // Top horizontal border with T-junction
+      (cols - 2) @ i =>
+         col = 1 + i
+         term::set_cell(tm, 0, col, 0x2500, fg, bg, 0)
+      term::set_cell(tm, 0, split_c, 0x252C, fg, bg, 0)            // ┬
+
+      // Middle horizontal divider with crosshair
+      term::set_cell(tm, split_r, 0, 0x251C, fg, bg, 0)           // ├
+      (cols - 2) @ j =>
+         col = 1 + j
+         term::set_cell(tm, split_r, col, 0x2500, fg, bg, 0)
+      term::set_cell(tm, split_r, split_c, 0x253C, fg, bg, 0)     // ┼ (Central Cross)
+      term::set_cell(tm, split_r, cols - 1, 0x2524, fg, bg, 0)    // ┤
+
+      // Bottom horizontal border with T-junction
+      (cols - 2) @ k =>
+         col = 1 + k
+         term::set_cell(tm, rows - 1, col, 0x2500, fg, bg, 0)
+      term::set_cell(tm, rows - 1, split_c, 0x2534, fg, bg, 0)    // ┴
+
+      // Vertical dividers
+      (rows - 2) @ r =>
+         row = 1 + r
+         row != split_r |
+            term::set_cell(tm, row, 0, 0x2502, fg, bg, 0)         // │ (Left)
+            term::set_cell(tm, row, split_c, 0x2502, fg, bg, 0)    // │ (Middle)
+            term::set_cell(tm, row, cols - 1, 0x2502, fg, bg, 0)   // │ (Right)
+
+      // Embedded Border Headers
+      // TL: Current Directory
+      tl_title = " [ " + st.path + " ] "
+      term::put_str_clipped(tm, 0, 2, tl_title, split_c - 4, pal.cyan, bg, term::ATTR_BOLD)
+
+      // TR: Previewed item title
+      tr_title = ?st.entries > 0
+         |
+            ent = st.entries(st.selected)!!
+            " [ Preview: " + ent.name + " (" + ent.fmt_size + ") ] "
+         | " [ Preview ] "
+      term::put_str_clipped(tm, 0, split_c + 2, tr_title, cols - split_c - 4, pal.yellow, bg, term::ATTR_BOLD)
+
+      // BL: Selection Cart
+      bl_title = ?st.cart > 0
+         | " [ Selection Cart (" + str::from_int(?st.cart) + " items) ] "
+         | " [ Selection Cart ] "
+      term::put_str_clipped(tm, split_r, 2, bl_title, split_c - 4, pal.purple, bg, term::ATTR_BOLD)
+
+      // BR: Storage & Operations
+      br_title = " [ Storage & Operations ] "
+      term::put_str_clipped(tm, split_r, split_c + 2, br_title, cols - split_c - 4, pal.green, bg, term::ATTR_BOLD)
+
+   // Draw Top-Left (TL): Primary File List
+   draw_file_list: term::Term, State, Int, Int, Int, Int => ()
+   draw_file_list = tm, st, list_r, list_c, list_h, list_w =>
+      pal = st.pal
+      n_items = ?st.entries
+
+      list_h @ row_idx =>
+         entry_idx = st.scroll + row_idx
+         y = list_r + row_idx
+         entry_idx < n_items
+            |
+               ent = st.entries(entry_idx)!!
+               is_active = entry_idx == st.selected
+               in_cart = is_in_cart(st, ent.name)
+
+               row_bg = is_active | pal.surface | pal.bg
+               term::fill_rect(tm, y, list_c, 1, list_w, ' ', pal.fg, row_bg, 0)
+
+               // Letter shortcut
+               let_ch = 'a' + (entry_idx % 26)
+               let_fg = is_active | pal.yellow | pal.cyan
+               term::set_cell(tm, y, list_c, let_ch, let_fg, row_bg, term::ATTR_BOLD)
+
+               // Selection star
+               star_ch = in_cart | '*' | ' '
+               term::set_cell(tm, y, list_c + 1, star_ch, pal.red, row_bg, term::ATTR_BOLD)
+
+               // Active cursor
+               ptr_ch = is_active | '>' | ' '
+               term::set_cell(tm, y, list_c + 2, ptr_ch, pal.yellow, row_bg, term::ATTR_BOLD)
+
+               // Icon & Name
+               name_x' = list_c + 4
+               st.show_icons |
+                  ic = icon::file_icon(ent.name, ent.is_exec, pal)
+                  term::set_cell(tm, y, list_c + 4, Int(ic.sym), ic.color, row_bg, 0)
+                  term::set_cell(tm, y, list_c + 5, ' ', pal.fg, row_bg, 0)
+                  name_x' = list_c + 6
+
+               avail_w = %max(list_w - 18, 4)
+               ent.is_dir
+                  |
+                     term::put_str_clipped(tm, y, name_x', ent.name + "/", avail_w, pal.blue, row_bg, term::ATTR_BOLD)
+                  |
+                     file_fg = file_color(ent, pal)
+                     term::put_str_clipped(tm, y, name_x', ent.name, avail_w, file_fg, row_bg, ent.is_exec | term::ATTR_BOLD | 0)
+
+               // Formatted size
+               sz_str = ent.fmt_size
+               sz_len = ?sz_str
+               sz_x = list_c + list_w - sz_len
+               sz_x > name_x' |
+                  term::put_str(tm, y, sz_x, sz_str, pal.muted, row_bg, 0)
+            |
+               term::fill_rect(tm, y, list_c, 1, list_w, ' ', pal.fg, pal.bg, 0)
+
+   // Draw Top-Right (TR): Live Content Preview
+   draw_preview: term::Term, State, Int, Int, Int, Int => ()
+   draw_preview = tm, st, prev_r, prev_c, prev_h, prev_w =>
+      pal = st.pal
+      n_items = ?st.entries
+
+      n_items == 0 |
+         term::fill_rect(tm, prev_r, prev_c, prev_h, prev_w, ' ', pal.fg, pal.bg, 0)
+         term::put_str(tm, prev_r + 1, prev_c + 2, "No files in directory", pal.muted, pal.bg, 0)
+         --|
+
+      sel_ent = st.entries(st.selected)!!
+      full_path = fs::join_path(st.path, sel_ent.name)
+      lines = preview::get_preview(full_path, sel_ent.is_dir, prev_h + st.preview_scroll + 5)
+      n_lines = ?lines
+
+      prev_h @ row_idx =>
+         y = prev_r + row_idx
+         line_idx = st.preview_scroll + row_idx
+         term::fill_rect(tm, y, prev_c, 1, prev_w, ' ', pal.fg, pal.bg, 0)
+         line_idx < n_lines |
+            line_str = lines(line_idx)!!
+            // If text file, prepend line number
+            !sel_ent.is_dir && n_lines > 0 |
+               num_str = str::from_int(line_idx + 1)
+               term::put_str(tm, y, prev_c + 1, num_str, pal.muted, pal.bg, 0)
+               term::put_str(tm, y, prev_c + 5, "│ ", pal.border, pal.bg, 0)
+               term::put_str_clipped(tm, y, prev_c + 7, line_str, prev_w - 8, pal.fg, pal.bg, 0)
+            |
+               term::put_str_clipped(tm, y, prev_c + 2, line_str, prev_w - 4, pal.fg, pal.bg, 0)
+
+   // Draw Bottom-Left (BL): Adaptive Selection Cart
+   draw_cart: term::Term, State, Int, Int, Int, Int => ()
+   draw_cart = tm, st, cart_r, cart_c, cart_h, cart_w =>
+      pal = st.pal
+      cart_h @ row_idx =>
+         term::fill_rect(tm, cart_r + row_idx, cart_c, 1, cart_w, ' ', pal.fg, pal.bg, 0)
+
+      n_cart = ?st.cart
+      n_cart == 0
+         |
+            // Empty cart: adaptive mode showing detailed metadata for hovered file
+            ?st.entries == 0 |
+               term::put_str(tm, cart_r, cart_c + 1, "(No item hovered)", pal.muted, pal.bg, 0)
+               --|
+            sel = st.entries(st.selected)!!
+            term::put_str_clipped(tm, cart_r, cart_c + 1, "Item:  " + sel.name + (sel.is_dir | " [DIR]" | ""), cart_w - 2, pal.cyan, pal.bg, term::ATTR_BOLD)
+            cart_h > 1 |
+               term::put_str_clipped(tm, cart_r + 1, cart_c + 1, "Size:  " + str::from_int(sel.size) + " bytes (" + sel.fmt_size + ")", cart_w - 2, pal.fg, pal.bg, 0)
+            cart_h > 2 |
+               term::put_str_clipped(tm, cart_r + 2, cart_c + 1, "Perms: " + sel.perms, cart_w - 2, pal.yellow, pal.bg, 0)
+            cart_h > 3 |
+               term::put_str_clipped(tm, cart_r + 3, cart_c + 1, "Hint:  Space to stage in cart", cart_w - 2, pal.muted, pal.bg, 0)
+         |
+            // Active cart: list staged items
+            tot_bytes' = 0
+            st.cart @ item => tot_bytes' = tot_bytes' + item.size
+            header_str = "Staged: " + str::from_int(n_cart) + " items (" + fs::format_size(tot_bytes', <->) + ")"
+            term::put_str_clipped(tm, cart_r, cart_c + 1, header_str, cart_w - 2, pal.purple, pal.bg, term::ATTR_BOLD)
+
+            max_items = %min(n_cart, cart_h - 1)
+            max_items @ i =>
+               it = st.cart(i)!!
+               y = cart_r + 1 + i
+               item_str = " • " + it.name + " (" + it.fmt_size + ")"
+               term::put_str_clipped(tm, y, cart_c + 1, item_str, cart_w - 2, pal.fg, pal.bg, 0)
+
+   // Draw Bottom-Right (BR): Storage & Operations Monitor
+   draw_monitor: term::Term, State, Int, Int, Int, Int => ()
+   draw_monitor = tm, st, mon_r, mon_c, mon_h, mon_w =>
+      pal = st.pal
+      mon_h @ row_idx =>
+         term::fill_rect(tm, mon_r + row_idx, mon_c, 1, mon_w, ' ', pal.fg, pal.bg, 0)
+
+      // Query filesystem capacity
+      fstat = fs::get_fs_stats(st.path)
+      used_gb = fstat.0
+      tot_gb = fstat.1
+      pct = fstat.2
+      free_gb = fstat.3
+
+      // Disk capacity header
+      disk_info = "Mount: " + st.path + " [" + str::from_int(used_gb) + " / " + str::from_int(tot_gb) + " GB]"
+      term::put_str_clipped(tm, mon_r, mon_c + 1, disk_info, mon_w - 2, pal.green, pal.bg, term::ATTR_BOLD)
+
+      // Capacity bar gauge
+      gauge_w = %max(mon_w - 18, 6)
+      fill_w = (gauge_w * pct) / 100
+      bar = {64}
+      bar += "["
+      gauge_w @ i =>
+         bar += i < fill_w | "=" | " "
+      bar += "] " + str::from_int(pct) + "% (" + str::from_int(free_gb) + " GB free)"
+      cart_h_avail = mon_h
+      cart_h_avail > 1 |
+         term::put_str_clipped(tm, mon_r + 1, mon_c + 1, +bar, mon_w - 2, pal.cyan, pal.bg, 0)
+
+      // Operations / Tasks
+      cart_h_avail > 2 |
+         st.op_mode
+            [OP_COPY]
+               term::put_str_clipped(tm, mon_r + 2, mon_c + 1, "Task: COPY staged (" + str::from_int(?st.cart) + " items)", mon_w - 2, pal.yellow, pal.bg, term::ATTR_BOLD)
+               cart_h_avail > 3 |
+                  term::put_str_clipped(tm, mon_r + 3, mon_c + 1, "Navigate to destination & press Enter/F5", mon_w - 2, pal.muted, pal.bg, 0)
+            [OP_MOVE]
+               term::put_str_clipped(tm, mon_r + 2, mon_c + 1, "Task: MOVE staged (" + str::from_int(?st.cart) + " items)", mon_w - 2, pal.red, pal.bg, term::ATTR_BOLD)
+               cart_h_avail > 3 |
+                  term::put_str_clipped(tm, mon_r + 3, mon_c + 1, "Navigate to destination & press Enter/F6", mon_w - 2, pal.muted, pal.bg, 0)
+            |
+               term::put_str_clipped(tm, mon_r + 2, mon_c + 1, "Status: Idle • 0 background tasks", mon_w - 2, pal.muted, pal.bg, 0)
+               cart_h_avail > 3 |
+                  term::put_str_clipped(tm, mon_r + 3, mon_c + 1, "Transfer Rate: 0.0 MB/s", mon_w - 2, pal.muted, pal.bg, 0)
+
+   // Draw Centered Modal Help Dialog (F1)
+   draw_help_modal: term::Term, State => ()
+   draw_help_modal = tm, st =>
+      r = tm.rows
+      c = tm.cols
+      pal = st.pal
+
+      h = 16
+      w = 54
+      top = %max((r - h) / 2, 1)
+      left = %max((c - w) / 2, 2)
+
+      // Fill background
+      term::fill_rect(tm, top, left, h, w, ' ', pal.fg, pal.surface, 0)
+      term::draw_titled_box(tm, top, left, h, w, term::BORDER_ROUNDED, "vade Keybindings Help", pal.cyan, pal.surface, pal.yellow)
+
+      keys = (String){}
+      keys += "a-z          Jump to visible file 1..26"
+      keys += "double a-z   Jump to file 27+ in directory"
+      keys += "Enter        Open file / Enter directory"
+      keys += "Backspace    Navigate up to parent directory"
+      keys += "Space        Toggle item into/out of Cart"
+      keys += "Shift-↑/↓    Scroll Preview pane (Alt-J/K)"
+      keys += "F1           Toggle this Help dialog"
+      keys += "F2           Rename hovered file"
+      keys += "F3           Toggle Full-Screen Preview"
+      keys += "F4           Edit file with $EDITOR"
+      keys += "F5 / F6      Copy / Move staged items"
+      keys += "F7           Create new file / directory"
+      keys += "F8           Delete hovered / staged items"
+      keys += "F10 / Q      Quit vade"
+
+      keys @ k_str, idx =>
+         term::put_str(tm, top + 1 + idx, left + 2, k_str, pal.fg, pal.surface, 0)
+
+   // Main layout and draw function
    draw: term::Term, State => ()
    draw = tm, st =>
       term::clear(tm)
@@ -56,97 +421,50 @@
       c = tm.cols
       pal = st.pal
 
-      // Outer window box with rounded corners
-      box_title = " vade — " + st.path + " "
-      term::draw_titled_box(tm, 0, 0, r, c, term::BORDER_ROUNDED, box_title, pal.border, pal.bg, pal.cyan)
-      term::set_title(tm, "vade: " + st.path)
+      // Bottom prompt row is reserved
+      grid_h = r - 1
+      grid_h < 6 || c < 20 | --|
 
-      // Header summary row
-      n_items = ?st.entries
-      summary = " " + str::from_int(n_items) + " items "
-      term::put_str(tm, 1, 3, summary, pal.muted, pal.bg, 0)
-      c > 60 |
-         term::put_str(tm, 1, c - 40, "[1:List 2:Short 3:Tree 4:Preview]", pal.muted, pal.bg, 0)
-
-      // Inner list area bounds
-      list_r = 3
-      list_c = 2
-      list_h = r - 6
-      list_w = c - 4
-      list_h < 1 || list_w < 10 | --|
-
-      // Inner file list box
-      term::draw_box(tm, list_r - 1, list_c - 1, list_h + 2, list_w + 2, term::BORDER_SINGLE, pal.border, pal.bg)
-
-      // Draw entries within viewable height
-      list_h @ row_idx =>
-         entry_idx = st.scroll + row_idx
-         entry_idx < n_items |
-            ent = st.entries(entry_idx)!!
-            is_active = entry_idx == st.selected
-            y = list_r + row_idx
-
-            // Background highlight for active row
-            row_bg = is_active | pal.surface | pal.bg
-            term::fill_rect(tm, y, list_c, 1, list_w, ' ', pal.fg, row_bg, 0)
-
-            // Fast-access letter indicator (e.g. "a ", "b ")
-            letter_str = entry_idx < 26
-               | "" + str::from_int(entry_idx + 1) + " "
-               | "  "
-            entry_idx < 26 |
-               let_buf = {3}
-               let_buf += ('a' + entry_idx)
-               let_buf += ' '
-               letter_str = +let_buf
-
-            letter_fg = is_active | pal.yellow | pal.cyan
-            term::put_str(tm, y, list_c + 1, letter_str, letter_fg, row_bg, term::ATTR_BOLD)
-
-            // Selection marker
-            marker = is_active | "▶ " | "  "
-            marker_fg = is_active | pal.yellow | pal.muted
-            term::put_str(tm, y, list_c + 4, marker, marker_fg, row_bg, term::ATTR_BOLD)
-
-            // Icon & File type color
-            name_x = list_c + 6
-            avail_name_w = list_w - 20
-            avail_name_w < 4 | avail_name_w = 4
-
-            ent.is_dir
-               |
-                  dir_name = ent.name + "/"
-                  term::put_str_clipped(tm, y, name_x, dir_name, avail_name_w, pal.blue, row_bg, term::ATTR_BOLD)
-               |
-                  // Highlight code and special extensions
-                  file_fg = ent.name(-4..) == ".dva"
-                     | pal.green
-                     | (ent.name(-3..) == ".md"
-                        | pal.purple
-                        | (ent.name(-4..) == ".ccl"
-                           | pal.orange
-                           | pal.fg))
-                  term::put_str_clipped(tm, y, name_x, ent.name, avail_name_w, file_fg, row_bg, 0)
-
-            // Size column right-aligned
-            sz_str = ent.fmt_size
-            sz_len = ?sz_str
-            sz_x = list_c + list_w - sz_len - 2
-            sz_x > name_x |
-               term::put_str(tm, y, sz_x, sz_str, pal.muted, row_bg, 0)
-
-      // Bottom Status / Help Bar
-      stat_r = r - 2
-      sel_info = n_items > 0
+      // If full preview mode is active, TR takes whole window
+      st.full_preview
          |
-            sel_ent = st.entries(st.selected)!!
-            "[" + str::from_int(st.selected + 1) + "/" + str::from_int(n_items) + "] " + sel_ent.name + " (" + str::from_int(sel_ent.size) + " B)"
-         | "Empty Directory"
+            term::draw_titled_box(tm, 0, 0, grid_h, c, term::BORDER_ROUNDED, " Full Preview (F3 to exit) ", pal.border, pal.bg, pal.yellow)
+            draw_preview(tm, st, 1, 1, grid_h - 2, c - 2)
+         |
+            split_r = %max((grid_h * 3) / 4, 4)
+            split_c = %max(c / 2, 10)
 
-      term::put_str(tm, stat_r - 1, 2, sel_info, pal.yellow, pal.bg, term::ATTR_BOLD)
+            // 1. Draw 4-pane cross frame
+            draw_cross_frame(tm, grid_h, c, split_r, split_c, st)
 
-      help = "[q] Exit  [↑/k, ↓/j] Navigate  [Enter/l] Open  [Backspace/h] Parent  [a-z] Jump"
-      term::put_str(tm, stat_r, 2, help, pal.muted, pal.bg, 0)
+            // 2. Draw Top-Left (TL): Primary File List
+            draw_file_list(tm, st, 1, 1, split_r - 1, split_c - 1)
 
-      // Render diff to screen with zero flicker
+            // 3. Draw Top-Right (TR): Live Content Preview
+            draw_preview(tm, st, 1, split_c + 1, split_r - 1, c - split_c - 2)
+
+            // 4. Draw Bottom-Left (BL): Selection Cart
+            draw_cart(tm, st, split_r + 1, 1, grid_h - split_r - 2, split_c - 1)
+
+            // 5. Draw Bottom-Right (BR): Storage & Operations Monitor
+            draw_monitor(tm, st, split_r + 1, split_c + 1, grid_h - split_r - 2, c - split_c - 2)
+
+      // 6. Draw Bottom Global Prompt Line (row r - 1)
+      prompt_y = r - 1
+      term::fill_rect(tm, prompt_y, 0, 1, c, ' ', pal.fg, pal.bg, 0)
+      st.prompt_mode
+         [PROMPT_RENAME]
+            term::put_str(tm, prompt_y, 1, "Rename: " + st.input_buf + "█", pal.yellow, pal.bg, term::ATTR_BOLD)
+         [PROMPT_MKDIR]
+            term::put_str(tm, prompt_y, 1, "Create (name ending in / creates dir): " + st.input_buf + "█", pal.cyan, pal.bg, term::ATTR_BOLD)
+         [PROMPT_DELETE]
+            n_del = ?st.cart > 0 | ?st.cart | 1
+            term::put_str(tm, prompt_y, 1, "Delete " + str::from_int(n_del) + " item(s) permanently? [y/N]: ", pal.red, pal.bg, term::ATTR_BOLD)
+         |
+            st.status_msg != "" |
+               term::put_str(tm, prompt_y, 1, st.status_msg, pal.green, pal.bg, term::ATTR_BOLD)
+
+      // 7. Modal overlays
+      st.show_help | draw_help_modal(tm, st)
+
       term::render(tm)

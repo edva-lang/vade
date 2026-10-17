@@ -1,116 +1,352 @@
 // vade/src/main.dva — Main terminal file manager entry point and interactive event loop
 
 #use io
+#use libc
+#use str
 #use @term
 #use "vade"
 #use "fs"
 
-t = term::init!
-term::enable_raw(t)
-term::enable_mouse(t)
-term::hide_cursor(t)
+edit_file: term::Term, vade::State, String => ()
+edit_file = t, st, full_path =>
+   term::disable_mouse(t)
+   term::disable_raw(t)
+   term::show_cursor(t)
+   io::out("\e[?1049l")
+   libc::system("${EDITOR:-nano} \"" + full_path + "\"")
+   io::out("\e[?1049h")
+   term::enable_raw(t)
+   term::enable_mouse(t)
+   term::hide_cursor(t)
+   st.entries = fs::list_dir(st.path)
 
-st = vade::new_state(".")
-vade::draw(t, st)
+run: () => ()
+run = !=>
+   t = term::init!
+   term::enable_raw(t)
+   term::enable_mouse(t)
+   term::hide_cursor(t)
 
-0.. @
-   ev = term::poll_event(t, 50)
-   visible_h = t.rows - 6
-   visible_h < 1 | visible_h = 1
+   st = vade::new_state(".")
+   vade::draw(t, st)
 
-   ev.kind == term::EV_KEY |
-      ev.code == term::KEY_CHAR |
-         ev.ch == 'q' | -->
-         ev.ch == 'j' |
-            vade::move_cursor(st, 1, visible_h)
-            vade::draw(t, st)
-         ev.ch == 'k' |
-            vade::move_cursor(st, -1, visible_h)
-            vade::draw(t, st)
-         ev.ch == 'l' |
-            n = ?st.entries
-            n > 0 |
-               ent = st.entries(st.selected)!!
-               ent.is_dir |
-                  new_path = ent.name == ".."
-                     | fs::parent_path(st.path)
-                     | fs::join_path(st.path, ent.name)
-                  vade::set_dir(st, new_path)
+   0.. @
+      ev = term::poll_event(t, 50)
+      grid_h = t.rows - 1
+      split_r = %max((grid_h * 3) / 4, 4)
+      visible_h = %max(split_r - 1, 1)
+
+      ev.kind
+         [term::EV_KEY]
+            // --- 1. Modal: Help dialog open ---
+            st.show_help |
+               ev.code
+                  [term::KEY_ESC, term::KEY_ENTER, term::KEY_F1]
+                     st.show_help = <->
+                     vade::draw(t, st)
+                  [term::KEY_CHAR]
+                     ev.ch
+                        ['q', 'Q']
+                           st.show_help = <->
+                           vade::draw(t, st)
+               --^
+
+            // --- 2. Modal: Prompt active (Rename, Mkdir, Delete) ---
+            st.prompt_mode != vade::PROMPT_NONE |
+               st.prompt_mode
+                  [vade::PROMPT_DELETE]
+                     ev.code
+                        [term::KEY_CHAR]
+                           ev.ch ['y', 'Y']
+                              |
+                                 n_c = ?st.cart
+                                 n_c > 0
+                                    |
+                                       st.cart @ item =>
+                                          fs::delete_entry(item.path, item.is_dir)
+                                       st.cart = (vade::CartItem){}
+                                       st.status_msg = "Deleted " + str::from_int(n_c) + " staged item(s)."
+                                    |
+                                       ?st.entries > 0 |
+                                          del_ent = st.entries(st.selected)!!
+                                          del_path = fs::join_path(st.path, del_ent.name)
+                                          fs::delete_entry(del_path, del_ent.is_dir)
+                                          st.status_msg = "Deleted " + del_ent.name
+                                 st.entries = fs::list_dir(st.path)
+                                 st.selected = %min(st.selected, %max(?st.entries - 1, 0))
+                                 st.prompt_mode = vade::PROMPT_NONE
+                                 vade::draw(t, st)
+                              |
+                                 st.prompt_mode = vade::PROMPT_NONE
+                                 st.status_msg = "Deletion cancelled."
+                                 vade::draw(t, st)
+                        [term::KEY_ESC]
+                           st.prompt_mode = vade::PROMPT_NONE
+                           st.status_msg = "Deletion cancelled."
+                           vade::draw(t, st)
+                  [vade::PROMPT_RENAME]
+                     ev.code
+                        [term::KEY_ESC]
+                           st.prompt_mode = vade::PROMPT_NONE
+                           st.status_msg = ""
+                           vade::draw(t, st)
+                        [term::KEY_BACKSPACE]
+                           len = ?st.input_buf
+                           len > 0 |
+                              st.input_buf = st.input_buf(..(len - 1))
+                              vade::draw(t, st)
+                        [term::KEY_ENTER]
+                           new_name = st.input_buf
+                           new_name != "" && ?st.entries > 0 |
+                              old_ent = st.entries(st.selected)!!
+                              old_p = fs::join_path(st.path, old_ent.name)
+                              new_p = fs::join_path(st.path, new_name)
+                              ok = fs::rename_path(old_p, new_p)
+                              ok | st.status_msg = "Renamed to " + new_name
+                              !ok | st.status_msg = "Failed to rename"
+                              st.entries = fs::list_dir(st.path)
+                           st.prompt_mode = vade::PROMPT_NONE
+                           vade::draw(t, st)
+                        [term::KEY_CHAR]
+                           st.input_buf += str::from_byte(ev.ch)
+                           vade::draw(t, st)
+                  [vade::PROMPT_MKDIR]
+                     ev.code
+                        [term::KEY_ESC]
+                           st.prompt_mode = vade::PROMPT_NONE
+                           st.status_msg = ""
+                           vade::draw(t, st)
+                        [term::KEY_BACKSPACE]
+                           len = ?st.input_buf
+                           len > 0 |
+                              st.input_buf = st.input_buf(..(len - 1))
+                              vade::draw(t, st)
+                        [term::KEY_ENTER]
+                           target = st.input_buf
+                           target != "" |
+                              full_p = fs::join_path(st.path, target)
+                              t_len = ?target
+                              is_d = target(-1..) == "/"
+                              ok' = <->
+                              is_d | ok' = fs::create_dir(full_p)
+                              !is_d | ok' = fs::create_file(full_p)
+                              ok' | st.status_msg = "Created " + target
+                              !ok' | st.status_msg = "Failed to create " + target
+                              st.entries = fs::list_dir(st.path)
+                           st.prompt_mode = vade::PROMPT_NONE
+                           vade::draw(t, st)
+                        [term::KEY_CHAR]
+                           st.input_buf += str::from_byte(ev.ch)
+                           vade::draw(t, st)
+               --^
+
+            // --- 3. Normal Navigation & Commands ---
+            ev.code
+               [term::KEY_CHAR]
+                  ev.ch
+                     [' ']
+                        vade::toggle_cart(st)
+                        vade::draw(t, st)
+                     ['I']
+                        vade::toggle_icons(st)
+                        vade::draw(t, st)
+                     ['Q'] -->
+                     [(_ !< 'a' && _ !> 'z')]
+                        vade::jump_shortcut(st, ev.ch - 'a', visible_h)
+                        vade::draw(t, st)
+
+               [term::KEY_F1]
+                  st.show_help = !st.show_help
                   vade::draw(t, st)
-         ev.ch == 'h' |
-            new_path = fs::parent_path(st.path)
-            vade::set_dir(st, new_path)
+
+               [term::KEY_F2]
+                  ?st.entries > 0 |
+                     sel_ent = st.entries(st.selected)!!
+                     st.prompt_mode = vade::PROMPT_RENAME
+                     st.input_buf = sel_ent.name
+                     vade::draw(t, st)
+
+               [term::KEY_F3]
+                  st.full_preview = !st.full_preview
+                  vade::draw(t, st)
+
+               [term::KEY_F4]
+                  ?st.entries > 0 |
+                     sel_ent = st.entries(st.selected)!!
+                     !sel_ent.is_dir |
+                        full_p = fs::join_path(st.path, sel_ent.name)
+                        edit_file(t, st, full_p)
+                        vade::draw(t, st)
+
+               [term::KEY_F5]
+                  st.op_mode == vade::OP_COPY
+                     |
+                        st.cart @ it =>
+                           dst_p = fs::join_path(st.path, it.name)
+                           fs::copy_file(it.path, dst_p)
+                        st.status_msg = "Copied " + str::from_int(?st.cart) + " items into " + st.path
+                        st.cart = (vade::CartItem){}
+                        st.op_mode = vade::OP_NONE
+                        st.entries = fs::list_dir(st.path)
+                        vade::draw(t, st)
+                     |
+                        ?st.cart == 0 && ?st.entries > 0 |
+                           vade::toggle_cart(st)
+                        st.op_mode = vade::OP_COPY
+                        st.status_msg = "Staged " + str::from_int(?st.cart) + " items for COPY. Navigate to dest & press Enter/F5."
+                        vade::draw(t, st)
+
+               [term::KEY_F6]
+                  st.op_mode == vade::OP_MOVE
+                     |
+                        st.cart @ it =>
+                           dst_p = fs::join_path(st.path, it.name)
+                           fs::rename_path(it.path, dst_p)
+                        st.status_msg = "Moved " + str::from_int(?st.cart) + " items into " + st.path
+                        st.cart = (vade::CartItem){}
+                        st.op_mode = vade::OP_NONE
+                        st.entries = fs::list_dir(st.path)
+                        vade::draw(t, st)
+                     |
+                        ?st.cart == 0 && ?st.entries > 0 |
+                           vade::toggle_cart(st)
+                        st.op_mode = vade::OP_MOVE
+                        st.status_msg = "Staged " + str::from_int(?st.cart) + " items for MOVE. Navigate to dest & press Enter/F6."
+                        vade::draw(t, st)
+
+               [term::KEY_F7]
+                  st.prompt_mode = vade::PROMPT_MKDIR
+                  st.input_buf = ""
+                  vade::draw(t, st)
+
+               [term::KEY_F8]
+                  ?st.cart > 0 || ?st.entries > 0 |
+                     st.prompt_mode = vade::PROMPT_DELETE
+                     vade::draw(t, st)
+
+               [term::KEY_F10] -->
+
+               [term::KEY_UP]
+                  (ev.mods .&. term::MOD_SHIFT) != 0 || (ev.mods .&. term::MOD_ALT) != 0
+                     |
+                        st.preview_scroll = %max(st.preview_scroll - 1, 0)
+                        vade::draw(t, st)
+                     |
+                        vade::move_cursor(st, -1, visible_h)
+                        vade::draw(t, st)
+
+               [term::KEY_DOWN]
+                  (ev.mods .&. term::MOD_SHIFT) != 0 || (ev.mods .&. term::MOD_ALT) != 0
+                     |
+                        st.preview_scroll = st.preview_scroll + 1
+                        vade::draw(t, st)
+                     |
+                        vade::move_cursor(st, 1, visible_h)
+                        vade::draw(t, st)
+
+               [term::KEY_PAGE_UP]
+                  vade::move_cursor(st, -visible_h, visible_h)
+                  vade::draw(t, st)
+
+               [term::KEY_PAGE_DOWN]
+                  vade::move_cursor(st, visible_h, visible_h)
+                  vade::draw(t, st)
+
+               [term::KEY_HOME]
+                  vade::move_cursor(st, -100000, visible_h)
+                  vade::draw(t, st)
+
+               [term::KEY_END]
+                  vade::move_cursor(st, 100000, visible_h)
+                  vade::draw(t, st)
+
+               [term::KEY_ENTER, term::KEY_RIGHT]
+                  n = ?st.entries
+                  n > 0 |
+                     ent = st.entries(st.selected)!!
+                     ent.is_dir
+                        |
+                           vade::set_dir(st, fs::join_path(st.path, ent.name))
+                           vade::draw(t, st)
+                        |
+                           st.op_mode != vade::OP_NONE
+                              |
+                                 st.op_mode == vade::OP_COPY
+                                    |
+                                       st.cart @ it => fs::copy_file(it.path, fs::join_path(st.path, it.name))
+                                       st.status_msg = "Copied " + str::from_int(?st.cart) + " items into " + st.path
+                                    |
+                                       st.cart @ it => fs::rename_path(it.path, fs::join_path(st.path, it.name))
+                                       st.status_msg = "Moved " + str::from_int(?st.cart) + " items into " + st.path
+                                 st.cart = (vade::CartItem){}
+                                 st.op_mode = vade::OP_NONE
+                                 st.entries = fs::list_dir(st.path)
+                                 vade::draw(t, st)
+                              |
+                                 full_p = fs::join_path(st.path, ent.name)
+                                 edit_file(t, st, full_p)
+                                 vade::draw(t, st)
+
+               [term::KEY_BACKSPACE, term::KEY_LEFT]
+                  vade::set_dir(st, fs::parent_path(st.path))
+                  vade::draw(t, st)
+
+               [term::KEY_ESC]
+                  st.full_preview
+                     |
+                        st.full_preview = <->
+                        vade::draw(t, st)
+                     |
+                        st.op_mode != vade::OP_NONE
+                           |
+                              st.op_mode = vade::OP_NONE
+                              st.status_msg = "Operation cancelled."
+                              vade::draw(t, st)
+                           | -->
+
+         [term::EV_MOUSE]
+            ev.mouse_act
+               [term::MOUSE_SCROLL_UP]
+                  split_c = %max(t.cols / 2, 10)
+                  ev.x > split_c
+                     |
+                        st.preview_scroll = %max(st.preview_scroll - 2, 0)
+                     |
+                        vade::move_cursor(st, -2, visible_h)
+                  vade::draw(t, st)
+               [term::MOUSE_SCROLL_DOWN]
+                  split_c = %max(t.cols / 2, 10)
+                  ev.x > split_c
+                     |
+                        st.preview_scroll = st.preview_scroll + 2
+                     |
+                        vade::move_cursor(st, 2, visible_h)
+                  vade::draw(t, st)
+               [term::MOUSE_PRESS]
+                  click_y = ev.y - 1
+                  click_x = ev.x
+                  split_c = %max(t.cols / 2, 10)
+                  click_x < split_c && click_y !< 1 && click_y < split_r |
+                     row_offset = click_y - 1
+                     clicked_idx = st.scroll + row_offset
+                     clicked_idx < ?st.entries |
+                        clicked_idx == st.selected
+                           |
+                              ent = st.entries(clicked_idx)!!
+                              ent.is_dir |
+                                 vade::set_dir(st, fs::join_path(st.path, ent.name))
+                           |
+                              st.selected = clicked_idx
+                              st.preview_scroll = 0
+                        vade::draw(t, st)
+
+         [term::EV_RESIZE]
             vade::draw(t, st)
-         ev.ch !< 'a' && ev.ch !> 'z' |
-            vade::jump_to_letter(st, ev.ch, visible_h)
-            vade::draw(t, st)
 
-      ev.code == term::KEY_UP |
-         vade::move_cursor(st, -1, visible_h)
-         vade::draw(t, st)
+   term::disable_mouse(t)
+   term::disable_raw(t)
+   term::show_cursor(t)
+   term::shutdown(t)
+   io::out("vade exited cleanly.\n")
 
-      ev.code == term::KEY_DOWN |
-         vade::move_cursor(st, 1, visible_h)
-         vade::draw(t, st)
-
-      ev.code == term::KEY_PAGE_UP |
-         vade::move_cursor(st, -visible_h, visible_h)
-         vade::draw(t, st)
-
-      ev.code == term::KEY_PAGE_DOWN |
-         vade::move_cursor(st, visible_h, visible_h)
-         vade::draw(t, st)
-
-      ev.code == term::KEY_HOME |
-         vade::move_cursor(st, -100000, visible_h)
-         vade::draw(t, st)
-
-      ev.code == term::KEY_END |
-         vade::move_cursor(st, 100000, visible_h)
-         vade::draw(t, st)
-
-      ev.code == term::KEY_ENTER || ev.code == term::KEY_RIGHT |
-         n = ?st.entries
-         n > 0 |
-            ent = st.entries(st.selected)!!
-            ent.is_dir |
-               new_path = ent.name == ".."
-                  | fs::parent_path(st.path)
-                  | fs::join_path(st.path, ent.name)
-               vade::set_dir(st, new_path)
-               vade::draw(t, st)
-
-      ev.code == term::KEY_BACKSPACE || ev.code == term::KEY_LEFT |
-         new_path = fs::parent_path(st.path)
-         vade::set_dir(st, new_path)
-         vade::draw(t, st)
-
-      ev.code == term::KEY_ESC | -->
-
-   ev.kind == term::EV_MOUSE |
-      ev.mouse_act == term::MOUSE_SCROLL_UP |
-         vade::move_cursor(st, -2, visible_h)
-         vade::draw(t, st)
-      ev.mouse_act == term::MOUSE_SCROLL_DOWN |
-         vade::move_cursor(st, 2, visible_h)
-         vade::draw(t, st)
-      ev.mouse_act == term::MOUSE_PRESS |
-         // Click within file list to jump to clicked row
-         click_y = ev.y - 1
-         list_r = 3
-         list_h = t.rows - 6
-         click_y !< list_r && click_y < (list_r + list_h) |
-            row_offset = click_y - list_r
-            clicked_idx = st.scroll + row_offset
-            clicked_idx < ?st.entries |
-               st.selected = clicked_idx
-               vade::draw(t, st)
-
-   ev.kind == term::EV_RESIZE |
-      vade::draw(t, st)
-
-term::disable_mouse(t)
-term::disable_raw(t)
-term::show_cursor(t)
-term::shutdown(t)
-io::out("vade exited cleanly.\n")
+run!

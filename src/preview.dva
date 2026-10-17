@@ -1,0 +1,118 @@
+// vade/src/preview.dva — Live file and directory preview generator
+
+#use libc
+#use str
+#use "fs"
+
+#public
+   #type Line (
+      text: String,
+      is_header: <>
+   )
+
+   // Checks if a byte buffer looks like binary (contains null bytes or control chars)
+   is_binary_buf: Addr, Int => <>
+   is_binary_buf = buf, len =>
+      limit = %min(len, 512)
+      found' = <->
+      limit @ i =>
+         b = @[buf + i u8]
+         (b == 0u8 || (b < 7u8 && b != 0u8)) |
+            found' = <+>
+            -->
+      found'
+
+   hex_char: Int => Rune
+   hex_char = nibble =>
+      nibble < 10 | '0' + nibble | 'a' + (nibble - 10)
+
+   // Formats a binary buffer as hex dump lines
+   format_hex_lines: Addr, Int, Int => (String){}
+   format_hex_lines = buf, len, max_lines =>
+      lines = (String){}
+      rows = %min((len + 15) / 16, max_lines)
+      rows @ r =>
+         off = r * 16
+         b = {80}
+         // Offset (8 hex digits)
+         b += str::from_int(off) + ": "
+         // Hex bytes (16 bytes)
+         16 @ i =>
+            idx = off + i
+            idx < len
+               |
+                  val = Int(@[buf + idx u8])
+                  hi = (val .>. 4) .&. 0x0F
+                  lo = val .&. 0x0F
+                  b += (hex_char(hi), hex_char(lo), ' ')
+               |
+                  b += "   "
+            i == 7 | b += " "
+
+         b += " |"
+         // ASCII representation
+         16 @ j =>
+            idx = off + j
+            idx < len |
+               ch = @[buf + idx u8]
+               is_print = ch !< 32u8 && ch !> 126u8
+               b += is_print | Rune(ch) | '.'
+         b += "|"
+         lines += +b
+      lines
+
+   // Read preview lines for text or binary file
+   read_file_preview: String, Int => (String){}
+   read_file_preview = path, max_lines =>
+      lines = (String){}
+      fd = libc::open(path, 0)
+      fd < 0 | --| lines
+
+      buf = {16384}
+      bytes_read = libc::read(fd, &buf, 16384)
+      libc::close(fd)
+
+      bytes_read !> 0 | --| lines
+
+      // Check if binary
+      is_binary = is_binary_buf(&buf, bytes_read)
+      is_binary | --| format_hex_lines(&buf, bytes_read, max_lines)
+
+      // Text file: extract lines up to max_lines
+      cur = {256}
+      bytes_read @ i =>
+         c = @[&buf + i u8]
+         c == 10u8
+            |
+               lines += +cur
+               cur = {256}
+               ?lines !< max_lines | -->
+            |
+               c != 13u8 | cur += Rune(c)
+      ?cur > 0 && ?lines < max_lines | lines += +cur
+      lines
+
+   // Directory preview: mini tree summary
+   read_dir_preview: String, Int => (String){}
+   read_dir_preview = path, max_lines =>
+      lines = (String){}
+      entries = fs::list_dir(path)
+      total = ?entries
+      lines += "Directory containing " + str::from_int(total) + " items:"
+      lines += ""
+      shown = %min(total, max_lines - 2)
+      shown @ i =>
+         ent = entries(i)!!
+         prefix = i == (total - 1) | "  └── " | "  ├── "
+         name_str = ent.is_dir | ent.name + "/" | ent.name
+         lines += prefix + name_str + " (" + ent.fmt_size + ")"
+      total > shown |
+         lines += "  ... (" + str::from_int(total - shown) + " more items)"
+      lines
+
+   // Main entry point for preview content
+   get_preview: String, <>, Int => (String){}
+   get_preview = path, is_dir, max_lines =>
+      is_dir
+         | read_dir_preview(path, max_lines)
+         | read_file_preview(path, max_lines)

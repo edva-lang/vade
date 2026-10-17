@@ -1,54 +1,88 @@
-// vade/src/fs.dva — File system directory scanning, statting, and entry sorting
+// vade/src/fs.dva — File system directory scanning, statting, entry sorting, and file operations
 
 #use libc
 #use str
+
+#foreign "c"
+   statvfs: (path: String, buf: Addr) => Int
+   unlink: (path: String) => Int
+   rmdir: (path: String) => Int
+   mkdir: (path: String, mode: Int) => Int
+   rename: (old_path: String, new_path: String) => Int
 
 #public
    #type Entry (
       name: String,
       is_dir: <>,
+      is_exec: <>,
       size: Int,
-      fmt_size: String
+      fmt_size: String,
+      perms: String,
+      mtime: Int
    )
 
    format_size: Int, <> => String
    format_size = sz, is_d =>
-      is_d | "   DIR"
-         |
-            sz < 1024
-               | str::from_int(sz) + " B"
-               |
-                  kb = sz / 1024
-                  kb < 1024
-                     | str::from_int(kb) + " KB"
-                     |
-                        mb = kb / 1024
-                        str::from_int(mb) + " MB"
+      is_d | --| "   DIR"
+      sz
+         [(_ < 1024)] str::from_int(sz) + " B"
+         [(_ < 1048576)] str::from_int(sz / 1024) + " KB"
+         [(_ < 1073741824)] str::from_int(sz / 1048576) + " MB"
+         | str::from_int(sz / 1073741824) + " GB"
+
+   // Format st_mode bits into standard rwxr-xr-x representation
+   format_perms: Int, <> => String
+   format_perms = mode, is_d =>
+      b = {16}
+      b += is_d | 'd' | '-'
+      b += (mode .&. 0x100) != 0 | 'r' | '-'
+      b += (mode .&. 0x080) != 0 | 'w' | '-'
+      b += (mode .&. 0x040) != 0 | 'x' | '-'
+      b += (mode .&. 0x020) != 0 | 'r' | '-'
+      b += (mode .&. 0x010) != 0 | 'w' | '-'
+      b += (mode .&. 0x008) != 0 | 'x' | '-'
+      b += (mode .&. 0x004) != 0 | 'r' | '-'
+      b += (mode .&. 0x002) != 0 | 'w' | '-'
+      b += (mode .&. 0x001) != 0 | 'x' | '-'
+      +b
 
    join_path: String, String => String
    join_path = p1, p2 =>
-      p1 == "" || p1 == "." | p2
-         |
-            p1 == "/" | "/" + p2
-               |
-                  p1(-1..) == "/" | p1 + p2 | p1 + "/" + p2
+      p1
+         ["", "."] p2
+         ["/"] "/" + p2
+         | p1(-1..) == "/" | p1 + p2 | p1 + "/" + p2
+
+   resolve_path: String => String
+   resolve_path = p =>
+      rbuf = {4096}
+      rp = libc::realpath(p, &rbuf)
+      rp == 0 | --| p
+      b = {4096}
+      0.. @ i =>
+         c = @[rp + i i8]
+         c == 0i8 | -->
+         b += c
+      +b
 
    parent_path: String => String
    parent_path = p =>
-      p == "" || p == "." || p == "/" | ".."
+      p
+         ["", "."] ".."
+         ["/"] "/"
+         [".."] "../.."
          |
             len = ?p
+            len !< 3 && p(-3..) == "/.." | --| p + "/.."
             // Find last slash
             last_slash' = -1
             len @ i =>
                idx = len - 1 - i
                p(idx) == '/' && last_slash' < 0 | last_slash' = idx
-            last_slash' < 0
-               | "."
-               |
-                  last_slash' == 0
-                     | "/"
-                     | p(..last_slash')
+            last_slash'
+               [(_ < 0)] "."
+               [0] "/"
+               | p(..last_slash')
 
    read_dir_entry: Addr => (String, Int)
    read_dir_entry = ent =>
@@ -78,27 +112,31 @@
          info = read_dir_entry(ent)
          name = info.0
          d_type = info.1
-         // Skip "."
-         name == "." | --^
-         // Only show ".." if we have parent
-         is_parent = name == ".."
-         is_d = d_type == 4 || is_parent
+         // Skip "." and ".."
+         name
+            [".", ".."] --^
 
-         // Stat for size if not parent
-         full_path = join_path(dir_path, name)
+         is_d' = d_type == 4
+         is_x' = <->
          size' = 0
-         !is_parent |
-            st_res = libc::stat(full_path, &sbuf)
-            st_res == 0 |
+         mtime' = 0
+         mode' = 0
+
+         full_path = join_path(dir_path, name)
+         libc::stat(full_path, &sbuf)
+            [0]
                size' = Int(@[&sbuf + 48 i64])
-               // If d_type was 0 (unknown on some filesystems), inspect st_mode
+               mtime' = Int(@[&sbuf + 88 i64])
                st_mode = Int(@[&sbuf + 24 u32])
-               (st_mode .&. 0xF000) == 0x4000 | is_d = <+>
+               mode' = st_mode
+               (st_mode .&. 0xF000) == 0x4000 | is_d' = <+>
+               (st_mode .&. 73) != 0 && !is_d' | is_x' = <+>
 
-         fmt_sz = format_size(size', is_d)
-         entry = Entry((name, is_d, size', fmt_sz))
+         fmt_sz = format_size(size', is_d')
+         perms = format_perms(mode', is_d')
+         entry = Entry((name, is_d', is_x', size', fmt_sz, perms, mtime'))
 
-         is_d | dirs += entry | files += entry
+         is_d' | dirs += entry | files += entry
 
       libc::closedir(dp)
 
@@ -108,8 +146,7 @@
          (nd - 1) @ j =>
             d1 = dirs(j)!!
             d2 = dirs(j + 1)!!
-            // Keep ".." at very top
-            d1.name != ".." && (d2.name == ".." || str::cmp(d1.name, d2.name) > 0) |
+            str::cmp(d1.name, d2.name) > 0 |
                dirs(j) = d2
                dirs(j + 1) = d1
 
@@ -128,3 +165,72 @@
       files @ f => res += f
       res
 
+   // Query filesystem capacity: returns (used_gb, total_gb, pct, free_gb)
+   get_fs_stats: String => (Int, Int, Int, Int)
+   get_fs_stats = p =>
+      buf = {128}
+      rc = statvfs(p, &buf)
+      rc != 0 | --| (0, 0, 0, 0)
+      frsize = Int(@[&buf + 8 u64])
+      eff_frsize' = frsize == 0 | Int(@[&buf + 0 u64]) | frsize
+      eff_frsize' = eff_frsize' == 0 | 4096 | eff_frsize'
+      blocks = Int(@[&buf + 16 u64])
+      bavail = Int(@[&buf + 32 u64])
+
+      gb_div = 1073741824
+      total_bytes = blocks * eff_frsize'
+      free_bytes = bavail * eff_frsize'
+      used_bytes = total_bytes > free_bytes | total_bytes - free_bytes | 0
+
+      total_gb = total_bytes / gb_div
+      free_gb = free_bytes / gb_div
+      used_gb = used_bytes / gb_div
+
+      pct = total_bytes > 0 | (used_bytes * 100) / total_bytes | 0
+      (used_gb, total_gb, pct, free_gb)
+
+   // File operations
+   create_file: String => <>
+   create_file = p =>
+      fd = libc::open(p, 577) // O_WRONLY | O_CREAT | O_TRUNC (01000 | 0100 | 01)
+      fd < 0 | --| <->
+      libc::close(fd)
+      <+>
+
+   create_dir: String => <>
+   create_dir = p =>
+      rc = mkdir(p, 493) // 0755
+      rc == 0
+
+   rename_path: String, String => <>
+   rename_path = old_p, new_p =>
+      rc = rename(old_p, new_p)
+      rc == 0
+
+   delete_entry: String, <> => <>
+   delete_entry = p, is_d =>
+      rc = is_d | rmdir(p) | unlink(p)
+      rc == 0
+
+   copy_file: String, String => <>
+   copy_file = src, dst =>
+      s_fd = libc::open(src, 0) // O_RDONLY
+      s_fd < 0 | --| <->
+      d_fd = libc::open(dst, 577) // O_WRONLY | O_CREAT | O_TRUNC
+      d_fd < 0 |
+         libc::close(s_fd)
+         --| <->
+
+      buf = {16384}
+      ok' = <+>
+      0.. @ step =>
+         n = libc::read(s_fd, &buf, 16384)
+         n !> 0 | -->
+         w = libc::write_ptr(d_fd, &buf, n)
+         w != n |
+            ok' = <->
+            -->
+
+      libc::close(s_fd)
+      libc::close(d_fd)
+      ok'
