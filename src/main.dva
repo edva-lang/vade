@@ -46,9 +46,10 @@ run = !=>
 
    0.. @
       ev = term::poll_event(t, 50)
-      grid_h = t.rows - 1
-      split_r = %max((grid_h * 3) / 4, 4)
-      visible_h = %max(split_r - 1, 1)
+      lay = vade::compute_layout(t.rows, t.cols)
+      visible_h = lay.list_h
+      split_r = lay.split_r
+      split_c = lay.split_c
 
       ev.kind
          [term::EV_KEY]
@@ -397,16 +398,14 @@ run = !=>
          [term::EV_MOUSE]
             ev.mouse_act
                [term::MOUSE_SCROLL_UP]
-                  split_c = %max(t.cols / 2, 10)
-                  ev.x > split_c
+                  ev.x > split_c && lay.has_right
                      |
                         st.preview_scroll = %max(st.preview_scroll - 2, 0)
                      |
                         vade::move_cursor(st, -2, visible_h)
                   vade::draw(t, st)
                [term::MOUSE_SCROLL_DOWN]
-                  split_c = %max(t.cols / 2, 10)
-                  ev.x > split_c
+                  ev.x > split_c && lay.has_right
                      |
                         st.preview_scroll = st.preview_scroll + 2
                      |
@@ -415,8 +414,7 @@ run = !=>
                [term::MOUSE_PRESS]
                   click_y = ev.y - 1
                   click_x = ev.x
-                  split_c = %max(t.cols / 2, 10)
-                  click_x < split_c && click_y !< 1 && click_y < split_r |
+                  (!lay.has_right || click_x < split_c) && click_y !< 1 && click_y !> lay.list_h |
                      row_offset = click_y - 1
                      clicked_idx = st.scroll + row_offset
                      clicked_idx < ?st.entries |

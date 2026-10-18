@@ -19,6 +19,47 @@
    OP_COPY = 1
    OP_MOVE = 2
 
+   #type Layout (
+      has_right: <>,
+      has_bottom: <>,
+      has_attrs: <>,
+      has_sizes: <>,
+      split_r: Int,
+      split_c: Int,
+      list_h: Int,
+      list_w: Int,
+      bottom_h: Int,
+      grid_h: Int
+   )
+
+   compute_layout: Int, Int => Layout
+   compute_layout = rows, cols =>
+      grid_h = rows - 1
+      has_right = cols !< 54
+      has_attrs = cols !< 80
+      has_sizes = cols !< 30
+
+      has_bottom = grid_h !< 8
+      bottom_h = has_bottom | %max(2, grid_h - (grid_h * 3) / 4 - 2) | 0
+      split_r = has_bottom | (grid_h - 2 - bottom_h) | (grid_h - 1)
+      split_c = has_right | %max(cols / 2, 10) | (cols - 1)
+
+      list_h = has_bottom | %max(split_r - 1, 1) | %max(grid_h - 2, 1)
+      list_w = has_right | %max(split_c - 1, 1) | %max(cols - 2, 1)
+
+      Layout((
+         has_right,
+         has_bottom,
+         has_attrs,
+         has_sizes,
+         split_r,
+         split_c,
+         list_h,
+         list_w,
+         bottom_h,
+         grid_h
+      ))
+
    #type CartItem (
       name: String,
       path: String,
@@ -198,71 +239,85 @@
       ent.is_exec | --| pal.green
       | pal.fg
 
-   // Draw the 4-pane cross framing with embedded headers
-   draw_cross_frame: term::Term, Int, Int, Int, Int, State => ()
-   draw_cross_frame = tm, rows, cols, split_r, split_c, st =>
+   // Draw adaptive framing with embedded headers based on layout tiers
+   draw_adaptive_frame: term::Term, Layout, State => ()
+   draw_adaptive_frame = tm, lay, st =>
       pal = st.pal
       fg = pal.border
       bg = pal.bg
+      grid_h = lay.grid_h
+      cols = tm.cols
+      split_r = lay.split_r
+      split_c = lay.split_c
 
       // Outer corners
       term::set_cell(tm, 0, 0, 0x250C, fg, bg, 0)                  // ┌
       term::set_cell(tm, 0, cols - 1, 0x2510, fg, bg, 0)           // ┐
-      term::set_cell(tm, rows - 1, 0, 0x2514, fg, bg, 0)          // └
-      term::set_cell(tm, rows - 1, cols - 1, 0x2518, fg, bg, 0)   // ┘
+      term::set_cell(tm, grid_h - 1, 0, 0x2514, fg, bg, 0)          // └
+      term::set_cell(tm, grid_h - 1, cols - 1, 0x2518, fg, bg, 0)   // ┘
 
-      // Top horizontal border with T-junction
+      // Top horizontal border
       (cols - 2) @ i =>
          col = 1 + i
          term::set_cell(tm, 0, col, 0x2500, fg, bg, 0)
-      term::set_cell(tm, 0, split_c, 0x252C, fg, bg, 0)            // ┬
+      lay.has_right | term::set_cell(tm, 0, split_c, 0x252C, fg, bg, 0) // ┬
 
-      // Middle horizontal divider with crosshair
-      term::set_cell(tm, split_r, 0, 0x251C, fg, bg, 0)           // ├
-      (cols - 2) @ j =>
-         col = 1 + j
-         term::set_cell(tm, split_r, col, 0x2500, fg, bg, 0)
-      term::set_cell(tm, split_r, split_c, 0x253C, fg, bg, 0)     // ┼ (Central Cross)
-      term::set_cell(tm, split_r, cols - 1, 0x2524, fg, bg, 0)    // ┤
-
-      // Bottom horizontal border with T-junction
+      // Bottom horizontal border
       (cols - 2) @ k =>
          col = 1 + k
-         term::set_cell(tm, rows - 1, col, 0x2500, fg, bg, 0)
-      term::set_cell(tm, rows - 1, split_c, 0x2534, fg, bg, 0)    // ┴
+         term::set_cell(tm, grid_h - 1, col, 0x2500, fg, bg, 0)
+      lay.has_right | term::set_cell(tm, grid_h - 1, split_c, 0x2534, fg, bg, 0) // ┴
 
-      // Vertical dividers
-      (rows - 2) @ r =>
+      // Outer left & right vertical borders
+      (grid_h - 2) @ r =>
          row = 1 + r
-         row != split_r |
-            term::set_cell(tm, row, 0, 0x2502, fg, bg, 0)         // │ (Left)
-            term::set_cell(tm, row, split_c, 0x2502, fg, bg, 0)    // │ (Middle)
-            term::set_cell(tm, row, cols - 1, 0x2502, fg, bg, 0)   // │ (Right)
+         term::set_cell(tm, row, 0, 0x2502, fg, bg, 0)
+         term::set_cell(tm, row, cols - 1, 0x2502, fg, bg, 0)
+
+      // Middle vertical divider (if has_right)
+      lay.has_right |
+         (grid_h - 2) @ r2 =>
+            row = 1 + r2
+            (!lay.has_bottom || row != split_r) |
+               term::set_cell(tm, row, split_c, 0x2502, fg, bg, 0)
+
+      // Middle horizontal divider (if has_bottom)
+      lay.has_bottom |
+         term::set_cell(tm, split_r, 0, 0x251C, fg, bg, 0)          // ├
+         term::set_cell(tm, split_r, cols - 1, 0x2524, fg, bg, 0)   // ┤
+         (cols - 2) @ j =>
+            col = 1 + j
+            term::set_cell(tm, split_r, col, 0x2500, fg, bg, 0)
+         lay.has_right |
+            term::set_cell(tm, split_r, split_c, 0x253C, fg, bg, 0) // ┼
 
       // Embedded Border Headers
-      // TL: Current Directory
+      // Top-Left / Top: Current Directory
+      tl_w = lay.has_right | (split_c - 4) | (cols - 4)
       tl_title = " [ " + st.path + " ] "
-      term::put_str_clipped(tm, 0, 2, tl_title, split_c - 4, pal.cyan, bg, term::ATTR_BOLD)
+      term::put_str_clipped(tm, 0, 2, tl_title, tl_w, pal.cyan, bg, term::ATTR_BOLD)
 
-      // TR: Previewed item title
-      tr_title = ?st.entries > 0
-         |
-            ent = st.entries(st.selected)!!
-            " [ Preview: " + ent.name + " (" + ent.fmt_size + ") ] "
-         | " [ Preview ] "
-      term::put_str_clipped(tm, 0, split_c + 2, tr_title, cols - split_c - 4, pal.yellow, bg, term::ATTR_BOLD)
+      // Top-Right: Previewed item title (if has_right)
+      lay.has_right |
+         tr_title = ?st.entries > 0
+            |
+               ent = st.entries(st.selected)!!
+               " [ Preview: " + ent.name + " (" + ent.fmt_size + ") ] "
+            | " [ Preview ] "
+         term::put_str_clipped(tm, 0, split_c + 2, tr_title, cols - split_c - 4, pal.yellow, bg, term::ATTR_BOLD)
 
-      // BL: History & Selection
-      bl_title = " [ History & Selection ] "
-      term::put_str_clipped(tm, split_r, 2, bl_title, split_c - 4, pal.purple, bg, term::ATTR_BOLD)
+      // Bottom dividers titles (if has_bottom)
+      lay.has_bottom |
+         bl_w = lay.has_right | (split_c - 4) | (cols - 4)
+         bl_title = " [ History & Selection ] "
+         term::put_str_clipped(tm, split_r, 2, bl_title, bl_w, pal.purple, bg, term::ATTR_BOLD)
+         lay.has_right |
+            br_title = " [ Storage & Operations ] "
+            term::put_str_clipped(tm, split_r, split_c + 2, br_title, cols - split_c - 4, pal.green, bg, term::ATTR_BOLD)
 
-      // BR: Storage & Operations
-      br_title = " [ Storage & Operations ] "
-      term::put_str_clipped(tm, split_r, split_c + 2, br_title, cols - split_c - 4, pal.green, bg, term::ATTR_BOLD)
-
-   // Draw Top-Left (TL): Primary File List
-   draw_file_list: term::Term, State, Int, Int, Int, Int => ()
-   draw_file_list = tm, st, list_r, list_c, list_h, list_w =>
+   // Draw Primary File List (TL or Full Width)
+   draw_file_list: term::Term, State, Int, Int, Int, Int, <>, <> => ()
+   draw_file_list = tm, st, list_r, list_c, list_h, list_w, has_attrs, has_sizes =>
       pal = st.pal
       n_items = ?st.entries
 
@@ -299,7 +354,17 @@
                   term::set_cell(tm, y, list_c + 5, ' ', pal.fg, row_bg, 0)
                   name_x' = list_c + 6
 
-               avail_w = %max(list_w - 18, 4)
+               // Suffix widths
+               sz_str = has_sizes | ent.fmt_size | ""
+               sz_len = ?sz_str
+               perms_str = has_attrs | ent.perms | ""
+               perms_len = ?perms_str
+
+               reserved_right' = 0
+               has_sizes && sz_len > 0 | reserved_right' = reserved_right' + sz_len + 1
+               has_attrs && perms_len > 0 | reserved_right' = reserved_right' + perms_len + 1
+
+               avail_w = %max(list_w - (name_x' - list_c) - reserved_right', 4)
                ent.is_dir
                   |
                      term::put_str_clipped(tm, y, name_x', ent.name + "/", avail_w, pal.blue, row_bg, term::ATTR_BOLD)
@@ -307,12 +372,16 @@
                      file_fg = file_color(ent, pal)
                      term::put_str_clipped(tm, y, name_x', ent.name, avail_w, file_fg, row_bg, ent.is_exec | term::ATTR_BOLD | 0)
 
-               // Formatted size
-               sz_str = ent.fmt_size
-               sz_len = ?sz_str
-               sz_x = list_c + list_w - sz_len
-               sz_x > name_x' |
-                  term::put_str(tm, y, sz_x, sz_str, pal.muted, row_bg, 0)
+               // Right suffixes: [attributes] [size]
+               has_attrs && perms_len > 0 |
+                  attr_x = list_c + list_w - sz_len - 1 - perms_len
+                  attr_x > (name_x' + 4) |
+                     term::put_str(tm, y, attr_x, perms_str, pal.muted, row_bg, 0)
+
+               has_sizes && sz_len > 0 |
+                  sz_x = list_c + list_w - sz_len
+                  sz_x > (name_x' + 4) |
+                     term::put_str(tm, y, sz_x, sz_str, pal.muted, row_bg, 0)
             |
                term::fill_rect(tm, y, list_c, 1, list_w, ' ', pal.fg, pal.bg, 0)
 
@@ -495,31 +564,32 @@
 
       // Bottom prompt row is reserved
       grid_h = r - 1
-      grid_h < 6 || c < 20 | --|
 
       // If full preview mode is active, TR takes whole window
-      st.full_preview
+      st.full_preview && grid_h > 2 && c > 10
          |
             term::draw_titled_box(tm, 0, 0, grid_h, c, term::BORDER_ROUNDED, " Full Preview (F3 to exit) ", pal.border, pal.bg, pal.yellow)
             draw_preview(tm, st, 1, 1, grid_h - 2, c - 2)
          |
-            split_r = %max((grid_h * 3) / 4, 4)
-            split_c = %max(c / 2, 10)
+            grid_h > 2 && c > 6 |
+               lay = compute_layout(r, c)
 
-            // 1. Draw 4-pane cross frame
-            draw_cross_frame(tm, grid_h, c, split_r, split_c, st)
+               // 1. Draw adaptive framing & dividers
+               draw_adaptive_frame(tm, lay, st)
 
-            // 2. Draw Top-Left (TL): Primary File List
-            draw_file_list(tm, st, 1, 1, split_r - 1, split_c - 1)
+               // 2. Draw Primary File List
+               draw_file_list(tm, st, 1, 1, lay.list_h, lay.list_w, lay.has_attrs, lay.has_sizes)
 
-            // 3. Draw Top-Right (TR): Live Content Preview
-            draw_preview(tm, st, 1, split_c + 1, split_r - 1, c - split_c - 2)
+               // 3. Draw Right Panes if width allows
+               lay.has_right |
+                  prev_w = c - lay.split_c - 2
+                  draw_preview(tm, st, 1, lay.split_c + 1, lay.list_h, prev_w)
+                  lay.has_bottom |
+                     draw_monitor(tm, st, lay.split_r + 1, lay.split_c + 1, lay.bottom_h, prev_w)
 
-            // 4. Draw Bottom-Left (BL): Selection Cart
-            draw_cart(tm, st, split_r + 1, 1, grid_h - split_r - 2, split_c - 1)
-
-            // 5. Draw Bottom-Right (BR): Storage & Operations Monitor
-            draw_monitor(tm, st, split_r + 1, split_c + 1, grid_h - split_r - 2, c - split_c - 2)
+               // 4. Draw Bottom-Left Pane (History & Selection) if height allows
+               lay.has_bottom |
+                  draw_cart(tm, st, lay.split_r + 1, 1, lay.bottom_h, lay.list_w)
 
       // 6. Draw Bottom Global Status / Command Line (row r - 1)
       prompt_y = r - 1
