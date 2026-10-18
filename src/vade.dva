@@ -118,6 +118,8 @@
    push_history: State, String => ()
    push_history = st, dir =>
       dir == "" | --|
+      home = fs::resolve_path(fs::get_home!)
+      dir == home | --|
       found' = <->
       ?st.history @ i =>
          st.history(i)!! == dir |
@@ -169,7 +171,7 @@
       slot !< 0 && slot < ?st.history |
          target = st.history(slot)!!
          set_dir(st, target)
-         st.status_msg = "Jumped to ^" + str::from_int(slot + 1) + ": " + target
+         st.status_msg = "Jumped to " + str::from_int(slot + 1) + ": " + target
 
    abbrev_path: String => String
    abbrev_path = p =>
@@ -227,19 +229,18 @@
    jump_shortcut: State, Int, Int => ()
    jump_shortcut = st, key_idx, max_visible =>
       n = ?st.entries
-      n == 0 | --|
+      n == 0 || key_idx !< n | --|
 
-      // Double jump logic: if same letter is pressed twice, jump to 27th item (index + 26)
       target_idx' = key_idx
-      st.last_jump_key == key_idx && (st.selected == key_idx || st.selected == key_idx + 26)
+      (st.selected % 26) == key_idx
          |
-            next_bank = st.selected + 26
-            target_idx' = next_bank < n | next_bank | st.selected
+            next_idx = st.selected + 26
+            target_idx' = next_idx < n | next_idx | key_idx
          |
-            target_idx' = key_idx < n | key_idx | (n - 1)
+            target_idx' = key_idx
 
       st.last_jump_key = key_idx
-      target_idx' < n |
+      target_idx' != st.selected |
          move_cursor(st, target_idx' - st.selected, max_visible)
 
    file_color: fs::Entry, term::Palette => Int
@@ -338,17 +339,21 @@
                is_active = entry_idx == st.selected
                in_cart = is_in_cart(st, ent.name)
 
-               row_bg = is_active | pal.surface | pal.bg
+               row_bg = in_cart
+                  |
+                     is_active
+                        | term::blend(pal.surface, pal.blue, 45)
+                        | term::blend(pal.bg, pal.blue, 25)
+                  |
+                     is_active
+                        | pal.surface
+                        | pal.bg
                term::fill_rect(tm, y, list_c, 1, list_w, ' ', pal.fg, row_bg, 0)
 
                // Letter shortcut
                let_ch = 'a' + (entry_idx % 26)
                let_fg = is_active | pal.yellow | pal.cyan
                term::set_cell(tm, y, list_c, let_ch, let_fg, row_bg, term::ATTR_BOLD)
-
-               // Selection star
-               star_ch = in_cart | '*' | ' '
-               term::set_cell(tm, y, list_c + 1, star_ch, pal.red, row_bg, term::ATTR_BOLD)
 
                // Active cursor
                ptr_ch = is_active | '>' | ' '
@@ -461,13 +466,13 @@
          y = cart_r + i
          dir = st.history(i)!!
          is_cur = dir == st.path
-         shortcut = "^" + str::from_int(i + 1) + " "
+         shortcut = str::from_int(i + 1) + " "
          disp = abbrev_path(dir)
          num_fg = is_cur | pal.yellow | pal.cyan
          path_fg = is_cur | pal.fg | pal.muted
          attr = is_cur | term::ATTR_BOLD | 0
          term::put_str(tm, y, cart_c + 1, shortcut, num_fg, pal.bg, term::ATTR_BOLD)
-         term::put_str_clipped(tm, y, cart_c + 4, disp, cart_w - 5, path_fg, pal.bg, attr)
+         term::put_str_clipped(tm, y, cart_c + 3, disp, cart_w - 4, path_fg, pal.bg, attr)
 
       // 2. Selected files total on contrast background (clear if nothing selected)
       n_sel = ?st.cart
@@ -543,12 +548,11 @@
       term::draw_titled_box(tm, top, left, h, w, term::BORDER_ROUNDED, "vade Keybindings Help", pal.cyan, pal.surface, pal.yellow)
 
       keys = (String){}
-      keys += "a-z          Jump to visible file 1..26"
-      keys += "double a-z   Jump to file 27+ in directory"
+      keys += "a-z          Jump / cycle files with letter shortcut"
       keys += "Enter        Open file / Enter directory"
       keys += "Backspace    Navigate up to parent directory"
       keys += "Space / Ins  Select / deselect & advance"
-      keys += "^1..^5       Fast cd to history directory (Ctrl-1..5)"
+      keys += "1..5         Fast cd to history directory"
       keys += "~            Jump to Home directory"
       keys += "-            Jump to Previous directory"
       keys += ":            Command line (:cd, :q, etc.)"
