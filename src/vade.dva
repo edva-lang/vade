@@ -13,6 +13,7 @@
    PROMPT_RENAME = 1
    PROMPT_MKDIR  = 2
    PROMPT_DELETE = 3
+   PROMPT_CMD    = 4
 
    OP_NONE = 0
    OP_COPY = 1
@@ -41,13 +42,18 @@
       op_mode: Int,
       prompt_mode: Int,
       input_buf: String,
-      status_msg: String
+      status_msg: String,
+      history: (String){},
+      history_slot: Int,
+      prev_path: String
    )
 
    new_state: String => State
    new_state = dir_path =>
       real_p = fs::resolve_path(dir_path)
       ents = fs::list_dir(real_p)
+      hist = (String){}
+      hist += real_p
       State((
          real_p,
          ents,
@@ -63,18 +69,66 @@
          OP_NONE,
          PROMPT_NONE,
          "",
+         "",
+         hist,
+         1,
          ""
       ))
+
+   push_history: State, String => ()
+   push_history = st, dir =>
+      ?st.history < 5
+         |
+            st.history += dir
+            st.history_slot = (?st.history == 5 | 0 | ?st.history)
+         |
+            slot = st.history_slot
+            st.history(slot) = dir
+            st.history_slot = (slot + 1) % 5
 
    set_dir: State, String => ()
    set_dir = st, new_p =>
       real_p = fs::resolve_path(new_p)
+      real_p == st.path | --|
+      st.prev_path = st.path
       st.path = real_p
       st.entries = fs::list_dir(real_p)
       st.selected = 0
       st.scroll = 0
       st.preview_scroll = 0
       st.last_jump_key = -1
+      push_history(st, real_p)
+
+   go_home: State => ()
+   go_home = st =>
+      h = fs::get_home!
+      set_dir(st, h)
+      st.status_msg = "Home: ~"
+
+   go_prev_dir: State => ()
+   go_prev_dir = st =>
+      st.prev_path != ""
+         |
+            prev = st.prev_path
+            set_dir(st, prev)
+            st.status_msg = "Previous: " + prev
+         |
+            st.status_msg = "No previous directory"
+
+   jump_history: State, Int => ()
+   jump_history = st, slot =>
+      slot !< 0 && slot < ?st.history |
+         target = st.history(slot)!!
+         set_dir(st, target)
+         st.status_msg = "Jumped to ^" + str::from_int(slot + 1) + ": " + target
+
+   abbrev_path: String => String
+   abbrev_path = p =>
+      h = fs::get_home!
+      hlen = ?h
+      hlen > 1 && ?p !< hlen && p(..hlen) == h
+         | "~" + p(hlen..)
+         | p
 
    toggle_icons: State => ()
    toggle_icons = st =>
@@ -198,10 +252,8 @@
          | " [ Preview ] "
       term::put_str_clipped(tm, 0, split_c + 2, tr_title, cols - split_c - 4, pal.yellow, bg, term::ATTR_BOLD)
 
-      // BL: Selection Cart
-      bl_title = ?st.cart > 0
-         | " [ Selection Cart (" + str::from_int(?st.cart) + " items) ] "
-         | " [ Selection Cart ] "
+      // BL: History & Selection
+      bl_title = " [ History & Selection ] "
       term::put_str_clipped(tm, split_r, 2, bl_title, split_c - 4, pal.purple, bg, term::ATTR_BOLD)
 
       // BR: Storage & Operations
@@ -315,41 +367,38 @@
                line_str = lines(line_idx)!!
                term::put_str_clipped(tm, y, prev_c + 2, line_str, prev_w - 4, pal.fg, pal.bg, 0)
 
-   // Draw Bottom-Left (BL): Adaptive Selection Cart
+   // Draw Bottom-Left (BL): Directory History & Selection Summary
    draw_cart: term::Term, State, Int, Int, Int, Int => ()
    draw_cart = tm, st, cart_r, cart_c, cart_h, cart_w =>
       pal = st.pal
       cart_h @ row_idx =>
          term::fill_rect(tm, cart_r + row_idx, cart_c, 1, cart_w, ' ', pal.fg, pal.bg, 0)
 
-      n_cart = ?st.cart
-      n_cart == 0
-         |
-            // Empty cart: adaptive mode showing detailed metadata for hovered file
-            ?st.entries == 0 |
-               term::put_str(tm, cart_r, cart_c + 1, "(No item hovered)", pal.muted, pal.bg, 0)
-               --|
-            sel = st.entries(st.selected)!!
-            term::put_str_clipped(tm, cart_r, cart_c + 1, "Item:  " + sel.name + (sel.is_dir | " [DIR]" | ""), cart_w - 2, pal.cyan, pal.bg, term::ATTR_BOLD)
-            cart_h > 1 |
-               term::put_str_clipped(tm, cart_r + 1, cart_c + 1, "Size:  " + str::from_int(sel.size) + " bytes (" + sel.fmt_size + ")", cart_w - 2, pal.fg, pal.bg, 0)
-            cart_h > 2 |
-               term::put_str_clipped(tm, cart_r + 2, cart_c + 1, "Perms: " + sel.perms, cart_w - 2, pal.yellow, pal.bg, 0)
-            cart_h > 3 |
-               term::put_str_clipped(tm, cart_r + 3, cart_c + 1, "Hint:  Space to stage in cart", cart_w - 2, pal.muted, pal.bg, 0)
-         |
-            // Active cart: list staged items
-            tot_bytes' = 0
-            st.cart @ item => tot_bytes' = tot_bytes' + item.size
-            header_str = "Staged: " + str::from_int(n_cart) + " items (" + fs::format_size(tot_bytes', <->) + ")"
-            term::put_str_clipped(tm, cart_r, cart_c + 1, header_str, cart_w - 2, pal.purple, pal.bg, term::ATTR_BOLD)
+      // 1. Visited directories history (up to 5 entries)
+      n_hist = ?st.history
+      max_hist = %min(n_hist, %min(5, cart_h))
+      max_hist @ i =>
+         y = cart_r + i
+         dir = st.history(i)!!
+         is_cur = dir == st.path
+         shortcut = "^" + str::from_int(i + 1) + " "
+         disp = abbrev_path(dir)
+         num_fg = is_cur | pal.yellow | pal.cyan
+         path_fg = is_cur | pal.fg | pal.muted
+         attr = is_cur | term::ATTR_BOLD | 0
+         term::put_str(tm, y, cart_c + 1, shortcut, num_fg, pal.bg, term::ATTR_BOLD)
+         term::put_str_clipped(tm, y, cart_c + 4, disp, cart_w - 5, path_fg, pal.bg, attr)
 
-            max_items = %min(n_cart, cart_h - 1)
-            max_items @ i =>
-               it = st.cart(i)!!
-               y = cart_r + 1 + i
-               item_str = " • " + it.name + " (" + it.fmt_size + ")"
-               term::put_str_clipped(tm, y, cart_c + 1, item_str, cart_w - 2, pal.fg, pal.bg, 0)
+      // 2. Selected files total on contrast background (clear if nothing selected)
+      n_sel = ?st.cart
+      n_sel > 0 && cart_h > 1 |
+         tot_bytes' = 0
+         st.cart @ item => tot_bytes' = tot_bytes' + item.size
+         unit_str = n_sel == 1 | " file (" | " files ("
+         sel_str = " ★ " + str::from_int(n_sel) + unit_str + fs::format_size(tot_bytes', <->) + ") "
+         sel_y = cart_r + cart_h - 1
+         term::fill_rect(tm, sel_y, cart_c, 1, cart_w, ' ', pal.fg, pal.surface, 0)
+         term::put_str_clipped(tm, sel_y, cart_c + 1, sel_str, cart_w - 2, pal.yellow, pal.surface, term::ATTR_BOLD)
 
    // Draw Bottom-Right (BR): Storage & Operations Monitor
    draw_monitor: term::Term, State, Int, Int, Int, Int => ()
@@ -404,8 +453,8 @@
       c = tm.cols
       pal = st.pal
 
-      h = 16
-      w = 54
+      h = 20
+      w = 58
       top = %max((r - h) / 2, 1)
       left = %max((c - w) / 2, 2)
 
@@ -419,6 +468,10 @@
       keys += "Enter        Open file / Enter directory"
       keys += "Backspace    Navigate up to parent directory"
       keys += "Space / Ins  Select / deselect & advance"
+      keys += "^1..^5       Fast cd to history directory (Ctrl-1..5)"
+      keys += "~            Jump to Home directory"
+      keys += "-            Jump to Previous directory"
+      keys += ":            Command line (:cd, :q, etc.)"
       keys += "Shift-↑/↓    Scroll Preview pane (Alt-J/K)"
       keys += "F1           Toggle this Help dialog"
       keys += "F2           Rename hovered file"
@@ -468,20 +521,24 @@
             // 5. Draw Bottom-Right (BR): Storage & Operations Monitor
             draw_monitor(tm, st, split_r + 1, split_c + 1, grid_h - split_r - 2, c - split_c - 2)
 
-      // 6. Draw Bottom Global Prompt Line (row r - 1)
+      // 6. Draw Bottom Global Status / Command Line (row r - 1)
       prompt_y = r - 1
-      term::fill_rect(tm, prompt_y, 0, 1, c, ' ', pal.fg, pal.bg, 0)
+      is_cmd_active = st.prompt_mode != PROMPT_NONE
+      line_bg = is_cmd_active | pal.surface | pal.bg
+      term::fill_rect(tm, prompt_y, 0, 1, c, ' ', pal.fg, line_bg, 0)
       st.prompt_mode
          [PROMPT_RENAME]
-            term::put_str(tm, prompt_y, 1, "Rename: " + st.input_buf + "█", pal.yellow, pal.bg, term::ATTR_BOLD)
+            term::put_str(tm, prompt_y, 1, " Rename: " + st.input_buf + "█", pal.yellow, line_bg, term::ATTR_BOLD)
          [PROMPT_MKDIR]
-            term::put_str(tm, prompt_y, 1, "Create (name ending in / creates dir): " + st.input_buf + "█", pal.cyan, pal.bg, term::ATTR_BOLD)
+            term::put_str(tm, prompt_y, 1, " Create (name ending in / creates dir): " + st.input_buf + "█", pal.cyan, line_bg, term::ATTR_BOLD)
          [PROMPT_DELETE]
             n_del = ?st.cart > 0 | ?st.cart | 1
-            term::put_str(tm, prompt_y, 1, "Delete " + str::from_int(n_del) + " item(s) permanently? [y/N]: ", pal.red, pal.bg, term::ATTR_BOLD)
+            term::put_str(tm, prompt_y, 1, " Delete " + str::from_int(n_del) + " item(s) permanently? [y/N]: ", pal.red, line_bg, term::ATTR_BOLD)
+         [PROMPT_CMD]
+            term::put_str(tm, prompt_y, 1, " :" + st.input_buf + "█", pal.yellow, line_bg, term::ATTR_BOLD)
          |
             st.status_msg != "" |
-               term::put_str(tm, prompt_y, 1, st.status_msg, pal.green, pal.bg, term::ATTR_BOLD)
+               term::put_str(tm, prompt_y, 1, " " + st.status_msg, pal.green, line_bg, term::ATTR_BOLD)
 
       // 7. Modal overlays
       st.show_help | draw_help_modal(tm, st)

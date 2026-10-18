@@ -8,6 +8,20 @@
 #use "vade"
 #use "fs"
 
+trim_str: String => String
+trim_str = s =>
+   len = ?s
+   len == 0 | --| ""
+   start' = 0
+   len @ i =>
+      s(i) == ' ' && start' == i | start' = i + 1
+   start' !< len | --| ""
+   end' = len
+   len @ j =>
+      idx = len - 1 - j
+      s(idx) == ' ' && end' == idx + 1 | end' = idx
+   s(start'..end')
+
 edit_file: term::Term, vade::State, String => ()
 edit_file = t, st, full_path =>
    term::disable_raw(t)
@@ -140,6 +154,55 @@ run = !=>
                            ch_s = ev.ch < 128 | str::from_byte(ev.ch) | utf::encode_codepoint(ev.ch)
                            st.input_buf = st.input_buf + ch_s
                            vade::draw(t, st)
+                  [vade::PROMPT_CMD]
+                     ev.code
+                        [term::KEY_ESC]
+                           st.prompt_mode = vade::PROMPT_NONE
+                           st.status_msg = ""
+                           vade::draw(t, st)
+                        [term::KEY_BACKSPACE]
+                           len = ?st.input_buf
+                           len > 0
+                              |
+                                 st.input_buf = st.input_buf(..(len - 1))
+                                 vade::draw(t, st)
+                              |
+                                 st.prompt_mode = vade::PROMPT_NONE
+                                 vade::draw(t, st)
+                        [term::KEY_ENTER]
+                           cmd = trim_str(st.input_buf)
+                           st.prompt_mode = vade::PROMPT_NONE
+                           cmd == "q" || cmd == "quit" || cmd == "exit" | -->
+                           cmd == "help" | st.show_help = <+>
+                           cmd == "home" || cmd == "~" | vade::go_home(st)
+                           cmd == "-" | vade::go_prev_dir(st)
+                           ?cmd !< 3 && cmd(..3) == "cd " |
+                              target = trim_str(cmd(3..))
+                              target == "" || target == "~"
+                                 | vade::go_home(st)
+                                 | target == "-"
+                                    | vade::go_prev_dir(st)
+                                    | target(0) == '/'
+                                       | vade::set_dir(st, target)
+                                       | vade::set_dir(st, fs::join_path(st.path, target))
+                           ?cmd !< 6 && cmd(..6) == "mkdir " |
+                              dname = trim_str(cmd(6..))
+                              full_p = fs::join_path(st.path, dname)
+                              fs::create_dir(full_p)
+                              st.entries = fs::list_dir(st.path)
+                              st.status_msg = "Created directory: " + dname
+                           ?cmd !< 6 && cmd(..6) == "touch " |
+                              fname = trim_str(cmd(6..))
+                              full_p = fs::join_path(st.path, fname)
+                              fs::create_file(full_p)
+                              st.entries = fs::list_dir(st.path)
+                              st.status_msg = "Created file: " + fname
+                           cmd == "" | st.status_msg = ""
+                           vade::draw(t, st)
+                        [term::KEY_CHAR]
+                           ch_s = ev.ch < 128 | str::from_byte(ev.ch) | utf::encode_codepoint(ev.ch)
+                           st.input_buf = st.input_buf + ch_s
+                           vade::draw(t, st)
                --^
 
             // --- 3. Normal Navigation & Commands ---
@@ -154,8 +217,27 @@ run = !=>
                         vade::toggle_icons(st)
                         vade::draw(t, st)
                      ['Q'] -->
+                     [':']
+                        st.prompt_mode = vade::PROMPT_CMD
+                        st.input_buf = ""
+                        vade::draw(t, st)
+                     ['~']
+                        vade::go_home(st)
+                        vade::draw(t, st)
+                     ['-']
+                        vade::go_prev_dir(st)
+                        vade::draw(t, st)
+                     ['1', '2', '3', '4', '5']
+                        vade::jump_history(st, ev.ch - '1')
+                        vade::draw(t, st)
                      [(_ !< 'a' && _ !> 'z')]
                         vade::jump_shortcut(st, ev.ch - 'a', visible_h)
+                        vade::draw(t, st)
+
+               [term::KEY_CTRL]
+                  ev.ch
+                     ['1', '2', '3', '4', '5']
+                        vade::jump_history(st, ev.ch - '1')
                         vade::draw(t, st)
 
                [term::KEY_F1]

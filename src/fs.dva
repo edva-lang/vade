@@ -9,6 +9,7 @@
    rmdir: (path: String) => Int
    mkdir: (path: String, mode: Int) => Int
    rename: (old_path: String, new_path: String) => Int
+   getenv: (name: String) => Addr
 
 #public
    #type Entry (
@@ -61,6 +62,17 @@
       b = {4096}
       0.. @ i =>
          c = @[rp + i i8]
+         c == 0i8 | -->
+         b += c
+      +b
+
+   get_home: () => String
+   get_home = !=>
+      h = getenv("HOME")
+      h == 0 | --| "/"
+      b = {4096}
+      0.. @ i =>
+         c = @[h + i i8]
          c == 0i8 | -->
          b += c
       +b
