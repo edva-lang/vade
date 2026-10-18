@@ -511,10 +511,11 @@
 
    hex_byte_fg: term::Palette, Int => Int
    hex_byte_fg = pal, val =>
-      val == 0    | --| pal.cyan
-      val == 0xFF | --| pal.red
-      val == 0x80 | --| pal.yellow
-      pal.fg
+      val
+         [0] pal.cyan
+         [0xFF] pal.red
+         [0x80] pal.yellow
+         | pal.fg
 
    draw_hex_preview: term::Term, State, String, Int, Int, Int, Int => ()
    draw_hex_preview = tm, st, path, prev_r, prev_c, prev_h, prev_w =>
