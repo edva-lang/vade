@@ -94,7 +94,6 @@
       real_p = fs::resolve_path(dir_path)
       ents = fs::list_dir(real_p)
       hist = (String){}
-      hist += real_p
       State((
          real_p,
          ents,
@@ -112,12 +111,20 @@
          "",
          "",
          hist,
-         1,
+         0,
          ""
       ))
 
    push_history: State, String => ()
    push_history = st, dir =>
+      dir == "" | --|
+      found' = <->
+      ?st.history @ i =>
+         st.history(i)!! == dir |
+            found' = <+>
+            -->
+      found' | --|
+
       ?st.history < 5
          |
             st.history += dir
@@ -131,14 +138,15 @@
    set_dir = st, new_p =>
       real_p = fs::resolve_path(new_p)
       real_p == st.path | --|
-      st.prev_path = st.path
+      old_p = st.path
+      st.prev_path = old_p
       st.path = real_p
       st.entries = fs::list_dir(real_p)
       st.selected = 0
       st.scroll = 0
       st.preview_scroll = 0
       st.last_jump_key = -1
-      push_history(st, real_p)
+      push_history(st, old_p)
 
    go_home: State => ()
    go_home = st =>
