@@ -1,6 +1,8 @@
 // vade/src/vade.dva — Core TUI state, 4-pane cross layout, and component renderers
 
+#use libc
 #use str
+#use ascii
 #use @term
 #use @syntax
 #use @syntax/token
@@ -396,39 +398,39 @@
 
       // Top-Left / Top: Current Directory & Badges
       tl_w = lay.has_right | (split_c - 4) | (cols - 4)
-      path_str = " [ " + st.path + " ] "
+      path_str = " " + st.path + " "
       path_len = ?path_str
-      term::put_str_clipped(tm, 0, 2, path_str, tl_w, pal.cyan, bg, term::ATTR_BOLD)
-      badge_x' = 2 + path_len
-      rem_w = tl_w - path_len
+      term::put_str_clipped(tm, 0, 2, path_str, tl_w, pal.cyan, pal.surface, term::ATTR_BOLD)
+      badge_x' = 2 + path_len + 1
+      rem_w = tl_w - path_len - 1
       rem_w > 12 |
          sort_lbl = sort_name(st.sort_mode)
          arrow = st.sort_rev | " ↓" | " ↑"
-         sort_badge = "[ " + sort_lbl + arrow + " ] "
+         sort_badge = " " + sort_lbl + arrow + " "
          sb_len = ?sort_badge
-         term::put_str_clipped(tm, 0, badge_x', sort_badge, rem_w, pal.yellow, bg, term::ATTR_BOLD)
-         badge_x' = badge_x' + sb_len
-         rem_w = rem_w - sb_len
-         st.show_hidden && rem_w > 6 |
-            term::put_str_clipped(tm, 0, badge_x', "[ . ] ", rem_w, pal.purple, bg, term::ATTR_BOLD)
+         term::put_str_clipped(tm, 0, badge_x', sort_badge, rem_w, pal.yellow, pal.surface, term::ATTR_BOLD)
+         badge_x' = badge_x' + sb_len + 1
+         rem_w = rem_w - sb_len - 1
+         st.show_hidden && rem_w > 5 |
+            term::put_str_clipped(tm, 0, badge_x', " . ", rem_w, pal.purple, pal.surface, term::ATTR_BOLD)
 
       // Top-Right: Previewed item title (if has_right)
       lay.has_right |
          tr_title = ?st.entries > 0
             |
                ent = st.entries(st.selected)!!
-               " [ Preview: " + ent.name + " (" + ent.fmt_size + ") ] "
-            | " [ Preview ] "
-         term::put_str_clipped(tm, 0, split_c + 2, tr_title, cols - split_c - 4, pal.yellow, bg, term::ATTR_BOLD)
+               " Preview: " + ent.name + " (" + ent.fmt_size + ") "
+            | " Preview "
+         term::put_str_clipped(tm, 0, split_c + 2, tr_title, cols - split_c - 4, pal.yellow, pal.surface, term::ATTR_BOLD)
 
       // Bottom dividers titles (if has_bottom)
       lay.has_bottom |
          bl_w = lay.has_right | (split_c - 4) | (cols - 4)
-         bl_title = " [ History & Selection ] "
-         term::put_str_clipped(tm, split_r, 2, bl_title, bl_w, pal.purple, bg, term::ATTR_BOLD)
+         bl_title = " History & Selection "
+         term::put_str_clipped(tm, split_r, 2, bl_title, bl_w, pal.purple, pal.surface, term::ATTR_BOLD)
          lay.has_right |
-            br_title = " [ Storage & Operations ] "
-            term::put_str_clipped(tm, split_r, split_c + 2, br_title, cols - split_c - 4, pal.green, bg, term::ATTR_BOLD)
+            br_title = " Storage & Operations "
+            term::put_str_clipped(tm, split_r, split_c + 2, br_title, cols - split_c - 4, pal.green, pal.surface, term::ATTR_BOLD)
 
    // Draw Primary File List (TL or Full Width)
    draw_file_list: term::Term, State, Int, Int, Int, Int, <>, <> => ()
@@ -507,6 +509,98 @@
             |
                term::fill_rect(tm, y, list_c, 1, list_w, ' ', pal.fg, pal.bg, 0)
 
+   hex_byte_fg: term::Palette, Int => Int
+   hex_byte_fg = pal, val =>
+      val == 0    | --| pal.cyan
+      val == 0xFF | --| pal.red
+      val == 0x80 | --| pal.yellow
+      pal.fg
+
+   draw_hex_preview: term::Term, State, String, Int, Int, Int, Int => ()
+   draw_hex_preview = tm, st, path, prev_r, prev_c, prev_h, prev_w =>
+      pal = st.pal
+      fd = libc::open(path, 0)
+      fd < 0 |
+         term::put_str(tm, prev_r + 1, prev_c + 2, "(Cannot open file)", pal.muted, pal.bg, 0)
+         --|
+
+      buf = {16384}
+      bytes_read = libc::read(fd, &buf, 16384)
+      libc::close(fd)
+
+      bytes_read !> 0 |
+         term::put_str(tm, prev_r + 1, prev_c + 2, "(Empty file)", pal.muted, pal.bg, 0)
+         --|
+
+      total_rows = (bytes_read + 15) / 16
+      max_off = (total_rows - 1) * 16
+      bw = %max(5, ?str::from_int(max_off))
+
+      prev_h @ row_idx =>
+         r = st.preview_scroll + row_idx
+         r < total_rows |
+            y = prev_r + row_idx
+            off = r * 16
+            off_s = str::from_int(off)
+            pad_len = %max(0, bw - ?off_s)
+
+            cur_x' = prev_c + 2
+            max_x = prev_c + prev_w
+
+            // Space padding for right-aligning block number
+            pad_len @ p =>
+               cur_x' < max_x |
+                  term::set_cell(tm, y, cur_x', ' ', pal.muted, pal.bg, 0)
+                  cur_x' = cur_x' + 1
+
+            // Block number
+            cur_x' + ?off_s < max_x |
+               term::put_str(tm, y, cur_x', off_s, pal.muted, pal.bg, 0)
+               cur_x' = cur_x' + ?off_s
+
+            // ": " separator
+            cur_x' + 1 < max_x |
+               term::put_str(tm, y, cur_x', ": ", pal.border, pal.bg, 0)
+               cur_x' = cur_x' + 2
+
+            // Hex bytes (16 per row)
+            16 @ i =>
+               idx = off + i
+               cur_x' + 2 < max_x |
+                  idx < bytes_read
+                     |
+                        val = Int(@[&buf + idx u8])
+                        hi = (val .>. 4) .&. 0x0F
+                        lo = val .&. 0x0F
+                        b_fg = hex_byte_fg(pal, val)
+                        term::set_cell(tm, y, cur_x', ascii::hex_char_lower(hi), b_fg, pal.bg, 0)
+                        term::set_cell(tm, y, cur_x' + 1, ascii::hex_char_lower(lo), b_fg, pal.bg, 0)
+                        term::set_cell(tm, y, cur_x' + 2, ' ', pal.fg, pal.bg, 0)
+                        cur_x' = cur_x' + 3
+                     |
+                        term::put_str(tm, y, cur_x', "   ", pal.fg, pal.bg, 0)
+                        cur_x' = cur_x' + 3
+               i == 7 && cur_x' < max_x |
+                  term::set_cell(tm, y, cur_x', ' ', pal.fg, pal.bg, 0)
+                  cur_x' = cur_x' + 1
+
+            // Divider before ASCII
+            cur_x' + 1 < max_x |
+               term::put_str(tm, y, cur_x', "│ ", pal.border, pal.bg, 0)
+               cur_x' = cur_x' + 2
+
+            // ASCII representation
+            16 @ j =>
+               idx = off + j
+               idx < bytes_read && cur_x' < max_x |
+                  ch = @[&buf + idx u8]
+                  is_print = ch !< 32u8 && ch !> 126u8
+                  val = Int(ch)
+                  b_fg = hex_byte_fg(pal, val)
+                  rn = is_print | Int(ch) | '.'
+                  term::set_cell(tm, y, cur_x', rn, b_fg, pal.bg, 0)
+                  cur_x' = cur_x' + 1
+
    // Draw Top-Right (TR): Live Content Preview
    draw_preview: term::Term, State, Int, Int, Int, Int => ()
    draw_preview = tm, st, prev_r, prev_c, prev_h, prev_w =>
@@ -522,6 +616,9 @@
 
       sel_ent = st.entries(st.selected)!!
       full_path = fs::join_path(st.path, sel_ent.name)
+      !sel_ent.is_dir && preview::is_binary_file(full_path) |
+         draw_hex_preview(tm, st, full_path, prev_r, prev_c, prev_h, prev_w)
+         --|
       lines = preview::get_preview(full_path, sel_ent.is_dir, prev_h + st.preview_scroll + 5)
       n_lines = ?lines
 
@@ -661,7 +758,7 @@
       keys += "1..5         Fast cd to history directory"
       keys += "~            Jump to Home directory"
       keys += "-            Jump to Previous directory"
-      keys += ";            View/Sort/Select menu ([N],[S],[M],[E],[R],[H],[A],[I],[C])"
+      keys += ";            View/Sort/Select menu (Name, Size, Mtime, Ext, Reverse, Hidden, All, Invert, Clear)"
       keys += "Esc          Prompt cancel / Press Esc-Esc to quit"
       keys += ":            Command line (:cd, :q, etc.)"
       keys += "Shift-↑/↓    Scroll Preview pane (Alt-J/K)"
@@ -691,27 +788,27 @@
    draw_semi_prompt = tm, y, max_x, pal, bg =>
       x' = 1
       x' = put_chunk(tm, y, x', " Sort: ", max_x, pal.purple, bg, <+>)
-      x' = put_chunk(tm, y, x', "[N]", max_x, pal.yellow, bg, <+>)
+      x' = put_chunk(tm, y, x', "N", max_x, pal.yellow, bg, <+>)
       x' = put_chunk(tm, y, x', "ame ", max_x, pal.fg, bg, <->)
-      x' = put_chunk(tm, y, x', "[S]", max_x, pal.yellow, bg, <+>)
+      x' = put_chunk(tm, y, x', "S", max_x, pal.yellow, bg, <+>)
       x' = put_chunk(tm, y, x', "ize ", max_x, pal.fg, bg, <->)
-      x' = put_chunk(tm, y, x', "[M]", max_x, pal.yellow, bg, <+>)
+      x' = put_chunk(tm, y, x', "M", max_x, pal.yellow, bg, <+>)
       x' = put_chunk(tm, y, x', "time ", max_x, pal.fg, bg, <->)
-      x' = put_chunk(tm, y, x', "[E]", max_x, pal.yellow, bg, <+>)
+      x' = put_chunk(tm, y, x', "E", max_x, pal.yellow, bg, <+>)
       x' = put_chunk(tm, y, x', "xt ", max_x, pal.fg, bg, <->)
-      x' = put_chunk(tm, y, x', "[R]", max_x, pal.yellow, bg, <+>)
+      x' = put_chunk(tm, y, x', "R", max_x, pal.yellow, bg, <+>)
       x' = put_chunk(tm, y, x', "everse ", max_x, pal.fg, bg, <->)
       x' = put_chunk(tm, y, x', "│ ", max_x, pal.border, bg, <->)
       x' = put_chunk(tm, y, x', "View: ", max_x, pal.cyan, bg, <+>)
-      x' = put_chunk(tm, y, x', "[H]", max_x, pal.yellow, bg, <+>)
+      x' = put_chunk(tm, y, x', "H", max_x, pal.yellow, bg, <+>)
       x' = put_chunk(tm, y, x', "idden ", max_x, pal.fg, bg, <->)
       x' = put_chunk(tm, y, x', "│ ", max_x, pal.border, bg, <->)
       x' = put_chunk(tm, y, x', "Sel: ", max_x, pal.green, bg, <+>)
-      x' = put_chunk(tm, y, x', "[A]", max_x, pal.yellow, bg, <+>)
+      x' = put_chunk(tm, y, x', "A", max_x, pal.yellow, bg, <+>)
       x' = put_chunk(tm, y, x', "ll ", max_x, pal.fg, bg, <->)
-      x' = put_chunk(tm, y, x', "[I]", max_x, pal.yellow, bg, <+>)
+      x' = put_chunk(tm, y, x', "I", max_x, pal.yellow, bg, <+>)
       x' = put_chunk(tm, y, x', "nvert ", max_x, pal.fg, bg, <->)
-      x' = put_chunk(tm, y, x', "[C]", max_x, pal.yellow, bg, <+>)
+      x' = put_chunk(tm, y, x', "C", max_x, pal.yellow, bg, <+>)
       x' = put_chunk(tm, y, x', "lear", max_x, pal.fg, bg, <->)
 
    // Main layout and draw function
@@ -728,7 +825,8 @@
       // If full preview mode is active, TR takes whole window
       st.full_preview && grid_h > 2 && c > 10
          |
-            term::draw_titled_box(tm, 0, 0, grid_h, c, term::BORDER_ROUNDED, " Full Preview (F3 to exit) ", pal.border, pal.bg, pal.yellow)
+            term::draw_box(tm, 0, 0, grid_h, c, term::BORDER_ROUNDED, pal.border, pal.bg)
+            term::put_str(tm, 0, 2, " Full Preview (F3 to exit) ", pal.yellow, pal.surface, term::ATTR_BOLD)
             draw_preview(tm, st, 1, 1, grid_h - 2, c - 2)
          |
             grid_h > 2 && c > 6 |

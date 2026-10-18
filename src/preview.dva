@@ -21,16 +21,31 @@
             -->
       found'
 
+   is_binary_file: String => <>
+   is_binary_file = path =>
+      fd = libc::open(path, 0)
+      fd < 0 | --| <->
+      buf = {512}
+      bytes_read = libc::read(fd, &buf, 512)
+      libc::close(fd)
+      bytes_read > 0 && is_binary_buf(&buf, bytes_read)
+
    // Formats a binary buffer as hex dump lines
    format_hex_lines: Addr, Int, Int => (String){}
    format_hex_lines = buf, len, max_lines =>
       lines = (String){}
       rows = %min((len + 15) / 16, max_lines)
+      rows == 0 | --| lines
+      max_off = (rows - 1) * 16
+      bw = %max(5, ?str::from_int(max_off))
       rows @ r =>
          off = r * 16
          b = {80}
-         // Offset (8 hex digits)
-         b += str::from_int(off) + ": "
+         // Right-aligned, space-padded block offset
+         off_s = str::from_int(off)
+         pad_len = %max(0, bw - ?off_s)
+         pad_len @ p_i => b += ' '
+         b += off_s + ": "
          // Hex bytes (16 bytes)
          16 @ i =>
             idx = off + i
