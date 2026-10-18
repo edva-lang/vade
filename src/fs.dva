@@ -26,10 +26,10 @@
    format_size = sz, is_d =>
       is_d | --| "DIR"
       sz
-         [(_ < 1024)] str::from_int(sz) + " B"
-         [(_ < 1048576)] str::from_int(sz / 1024) + " KB"
-         [(_ < 1073741824)] str::from_int(sz / 1048576) + " MB"
-         | str::from_int(sz / 1073741824) + " GB"
+         [< 0x400] str::from_int(sz) + " B"
+         [< 0x100000] str::from_int(sz / 0x400) + " KB"
+         [< 0x40000000] str::from_int(sz / 0x100000) + " MB"
+         | str::from_int(sz / 0x40000000) + " GB"
 
    // Format st_mode bits into standard rwxr-xr-x representation
    format_perms: Int, <> => String
@@ -92,7 +92,7 @@
                idx = len - 1 - i
                p(idx) == '/' && last_slash' < 0 | last_slash' = idx
             last_slash'
-               [(_ < 0)] "."
+               [< 0] "."
                [0] "/"
                | p(..last_slash')
 
@@ -225,7 +225,7 @@
       blocks = Int(@[&buf + 16 u64])
       bavail = Int(@[&buf + 32 u64])
 
-      gb_div = 1073741824
+      gb_div = 0x40000000
       total_bytes = blocks * eff_frsize'
       free_bytes = bavail * eff_frsize'
       used_bytes = total_bytes > free_bytes | total_bytes - free_bytes | 0
