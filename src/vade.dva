@@ -513,11 +513,11 @@
    hex_byte_fg = pal, val =>
       val
          [0] pal.border
-         [0xFF] pal.red
-         [0x80] pal.yellow
-         [(_ !< 32 && _ !> 126)] pal.fg
          [< 32] pal.cyan
+         [< 127] pal.fg
          [127] pal.cyan
+         [0x80] pal.yellow
+         [0xFF] pal.red
          | pal.purple
 
    draw_hex_preview: term::Term, State, String, Int, Int, Int, Int => ()
