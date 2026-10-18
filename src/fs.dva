@@ -107,9 +107,43 @@
          b += c
       (+b, d_type)
 
-   // List all entries in dir_path, sorted with directories first then alphabetically
-   list_dir: String => (Entry){}
-   list_dir = dir_path =>
+   get_ext: String => String
+   get_ext = name =>
+      len = ?name
+      last_dot' = -1
+      len @ i =>
+         idx = len - 1 - i
+         name(idx) == '.' && last_dot' < 0 | last_dot' = idx
+      last_dot' > 0 && last_dot' < (len - 1)
+         | name((last_dot' + 1)..)
+         | ""
+
+   cmp_entries: Entry, Entry, Int, <> => Int
+   cmp_entries = e1, e2, mode, rev =>
+      res' = 0
+      mode
+         [0] // Name
+            res' = str::cmp(e1.name, e2.name)
+         [1] // Size
+            res' = e1.size < e2.size | -1 | (e1.size > e2.size | 1 | str::cmp(e1.name, e2.name))
+         [2] // Mtime
+            res' = e1.mtime < e2.mtime | -1 | (e1.mtime > e2.mtime | 1 | str::cmp(e1.name, e2.name))
+         [3] // Extension
+            ext1 = get_ext(e1.name)
+            ext2 = get_ext(e2.name)
+            cmp_ext = str::cmp(ext1, ext2)
+            res' = cmp_ext != 0 | cmp_ext | str::cmp(e1.name, e2.name)
+         |
+            res' = str::cmp(e1.name, e2.name)
+      rev | -res' | res'
+
+   list_dir_simple: String => (Entry){}
+   list_dir_simple = dir_path =>
+      list_dir(dir_path, <->, 0, <->)
+
+   // List all entries in dir_path, sorted with directories first then by criterion
+   list_dir: String, <>, Int, <> => (Entry){}
+   list_dir = dir_path, show_hidden, sort_mode, sort_rev =>
       res = (Entry){}
       dp = libc::opendir(dir_path)
       dp == 0 | --| res
@@ -127,6 +161,8 @@
          // Skip "." and ".."
          name
             [".", ".."] --^
+
+         !show_hidden && ?name > 0 && name(0) == '.' | --^
 
          is_d' = d_type == 4
          is_x' = <->
@@ -158,7 +194,7 @@
          (nd - 1) @ j =>
             d1 = dirs(j)!!
             d2 = dirs(j + 1)!!
-            str::cmp(d1.name, d2.name) > 0 |
+            cmp_entries(d1, d2, sort_mode, sort_rev) > 0 |
                dirs(j) = d2
                dirs(j + 1) = d1
 
@@ -168,7 +204,7 @@
          (nf - 1) @ j =>
             f1 = files(j)!!
             f2 = files(j + 1)!!
-            str::cmp(f1.name, f2.name) > 0 |
+            cmp_entries(f1, f2, sort_mode, sort_rev) > 0 |
                files(j) = f2
                files(j + 1) = f1
 

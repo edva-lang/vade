@@ -1,7 +1,6 @@
-// vade/src/preview.dva — Live file and directory preview generator
-
 #use libc
 #use str
+#use ascii
 #use "fs"
 
 #public
@@ -22,10 +21,6 @@
             -->
       found'
 
-   hex_char: Int => Rune
-   hex_char = nibble =>
-      nibble < 10 | '0' + nibble | 'a' + (nibble - 10)
-
    // Formats a binary buffer as hex dump lines
    format_hex_lines: Addr, Int, Int => (String){}
    format_hex_lines = buf, len, max_lines =>
@@ -44,7 +39,7 @@
                   val = Int(@[buf + idx u8])
                   hi = (val .>. 4) .&. 0x0F
                   lo = val .&. 0x0F
-                  b += (hex_char(hi), hex_char(lo), ' ')
+                  b += (ascii::hex_char_lower(hi), ascii::hex_char_lower(lo), ' ')
                |
                   b += "   "
             i == 7 | b += " "
@@ -99,7 +94,7 @@
    read_dir_preview: String, Int => (String){}
    read_dir_preview = path, max_lines =>
       lines = (String){}
-      entries = fs::list_dir(path)
+      entries = fs::list_dir_simple(path)
       total = ?entries
       lines += "Directory containing " + str::from_int(total) + " items:"
       lines += ""

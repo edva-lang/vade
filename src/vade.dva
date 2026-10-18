@@ -14,6 +14,13 @@
    PROMPT_MKDIR  = 2
    PROMPT_DELETE = 3
    PROMPT_CMD    = 4
+   PROMPT_ESC    = 5
+   PROMPT_SEMI   = 6
+
+   SORT_NAME  = 0
+   SORT_SIZE  = 1
+   SORT_MTIME = 2
+   SORT_EXT   = 3
 
    OP_NONE = 0
    OP_COPY = 1
@@ -86,13 +93,16 @@
       status_msg: String,
       history: (String){},
       history_slot: Int,
-      prev_path: String
+      prev_path: String,
+      sort_mode: Int,
+      sort_rev: <>,
+      show_hidden: <>
    )
 
    new_state: String => State
    new_state = dir_path =>
       real_p = fs::resolve_path(dir_path)
-      ents = fs::list_dir(real_p)
+      ents = fs::list_dir(real_p, <->, SORT_NAME, <->)
       hist = (String){}
       State((
          real_p,
@@ -112,7 +122,10 @@
          "",
          hist,
          0,
-         ""
+         "",
+         SORT_NAME,
+         <->,
+         <->
       ))
 
    push_history: State, String => ()
@@ -143,7 +156,7 @@
       old_p = st.path
       st.prev_path = old_p
       st.path = real_p
-      st.entries = fs::list_dir(real_p)
+      st.entries = fs::list_dir(real_p, st.show_hidden, st.sort_mode, st.sort_rev)
       st.selected = 0
       st.scroll = 0
       st.preview_scroll = 0
@@ -212,6 +225,87 @@
 
       st.cart = new_cart
       st.status_msg = ""
+
+   sort_name: Int => String
+   sort_name = mode =>
+      mode
+         [SORT_NAME] "name"
+         [SORT_SIZE] "size"
+         [SORT_MTIME] "time"
+         [SORT_EXT] "ext"
+         | "name"
+
+   reload_dir: State => ()
+   reload_dir = st =>
+      cur_name = ?st.entries > 0 | st.entries(st.selected)!!.name | ""
+      st.entries = fs::list_dir(st.path, st.show_hidden, st.sort_mode, st.sort_rev)
+      n = ?st.entries
+      n == 0 |
+         st.selected = 0
+         st.scroll = 0
+         --|
+      found_idx' = -1
+      cur_name != "" |
+         n @ i =>
+            st.entries(i)!!.name == cur_name |
+               found_idx' = i
+               -->
+      found_idx' !< 0
+         | st.selected = found_idx'
+         | st.selected = %clamp(st.selected, 0, n - 1)
+      st.scroll = %clamp(st.scroll, 0, %max(0, n - 1))
+      st.selected < st.scroll | st.scroll = st.selected
+
+   set_sort_mode: State, Int => ()
+   set_sort_mode = st, mode =>
+      st.sort_mode = mode
+      reload_dir(st)
+      lbl = sort_name(mode)
+      st.status_msg = "Sorted by " + lbl
+
+   toggle_sort_rev: State => ()
+   toggle_sort_rev = st =>
+      st.sort_rev = !st.sort_rev
+      reload_dir(st)
+      dir_str = st.sort_rev | "descending (↓)" | "ascending (↑)"
+      st.status_msg = "Sort direction: " + dir_str
+
+   toggle_hidden: State => ()
+   toggle_hidden = st =>
+      st.show_hidden = !st.show_hidden
+      reload_dir(st)
+      h_str = st.show_hidden | "Showing hidden files" | "Hidden files hidden"
+      st.status_msg = h_str
+
+   select_all: State => ()
+   select_all = st =>
+      st.entries @ ent =>
+         full_p = fs::join_path(st.path, ent.name)
+         !is_in_cart(st, ent.name) |
+            st.cart += CartItem((ent.name, full_p, ent.is_dir, ent.size, ent.fmt_size))
+      st.status_msg = "Selected all " + str::from_int(?st.entries) + " item(s)"
+
+   clear_selection: State => ()
+   clear_selection = st =>
+      st.cart = (CartItem){}
+      st.status_msg = "Cleared selection"
+
+   invert_selection: State => ()
+   invert_selection = st =>
+      new_cart = (CartItem){}
+      st.cart @ item =>
+         cur_dir_item' = <->
+         st.entries @ ent =>
+            full_p = fs::join_path(st.path, ent.name)
+            item.path == full_p | cur_dir_item' = <+>
+         !cur_dir_item' | new_cart += item
+
+      st.entries @ ent =>
+         !is_in_cart(st, ent.name) |
+            full_p = fs::join_path(st.path, ent.name)
+            new_cart += CartItem((ent.name, full_p, ent.is_dir, ent.size, ent.fmt_size))
+      st.cart = new_cart
+      st.status_msg = "Inverted selection"
 
    move_cursor: State, Int, Int => ()
    move_cursor = st, delta, max_visible =>
@@ -300,11 +394,23 @@
          lay.has_right |
             term::set_cell(tm, split_r, split_c, 0x253C, fg, bg, 0) // ┼
 
-      // Embedded Border Headers
-      // Top-Left / Top: Current Directory
+      // Top-Left / Top: Current Directory & Badges
       tl_w = lay.has_right | (split_c - 4) | (cols - 4)
-      tl_title = " [ " + st.path + " ] "
-      term::put_str_clipped(tm, 0, 2, tl_title, tl_w, pal.cyan, bg, term::ATTR_BOLD)
+      path_str = " [ " + st.path + " ] "
+      path_len = ?path_str
+      term::put_str_clipped(tm, 0, 2, path_str, tl_w, pal.cyan, bg, term::ATTR_BOLD)
+      badge_x' = 2 + path_len
+      rem_w = tl_w - path_len
+      rem_w > 12 |
+         sort_lbl = sort_name(st.sort_mode)
+         arrow = st.sort_rev | " ↓" | " ↑"
+         sort_badge = "[ " + sort_lbl + arrow + " ] "
+         sb_len = ?sort_badge
+         term::put_str_clipped(tm, 0, badge_x', sort_badge, rem_w, pal.yellow, bg, term::ATTR_BOLD)
+         badge_x' = badge_x' + sb_len
+         rem_w = rem_w - sb_len
+         st.show_hidden && rem_w > 6 |
+            term::put_str_clipped(tm, 0, badge_x', "[ . ] ", rem_w, pal.purple, bg, term::ATTR_BOLD)
 
       // Top-Right: Previewed item title (if has_right)
       lay.has_right |
@@ -538,8 +644,8 @@
       c = tm.cols
       pal = st.pal
 
-      h = 20
-      w = 58
+      h = 22
+      w = 64
       top = %max((r - h) / 2, 1)
       left = %max((c - w) / 2, 2)
 
@@ -555,6 +661,8 @@
       keys += "1..5         Fast cd to history directory"
       keys += "~            Jump to Home directory"
       keys += "-            Jump to Previous directory"
+      keys += ";            View/Sort/Select menu ([N],[S],[M],[E],[R],[H],[A],[I],[C])"
+      keys += "Esc          Prompt cancel / Press Esc-Esc to quit"
       keys += ":            Command line (:cd, :q, etc.)"
       keys += "Shift-↑/↓    Scroll Preview pane (Alt-J/K)"
       keys += "F1           Toggle this Help dialog"
@@ -568,6 +676,43 @@
 
       keys @ k_str, idx =>
          term::put_str(tm, top + 1 + idx, left + 2, k_str, pal.fg, pal.surface, 0)
+
+   put_chunk: term::Term, Int, Int, String, Int, Int, Int, <> => Int
+   put_chunk = tm, y, cur_x, text, max_x, fg, bg, bold =>
+      len = ?text
+      (cur_x + len) < max_x
+         |
+            attr = bold | term::ATTR_BOLD | 0
+            term::put_str(tm, y, cur_x, text, fg, bg, attr)
+            cur_x + len
+         | cur_x
+
+   draw_semi_prompt: term::Term, Int, Int, term::Palette, Int => ()
+   draw_semi_prompt = tm, y, max_x, pal, bg =>
+      x' = 1
+      x' = put_chunk(tm, y, x', " Sort: ", max_x, pal.purple, bg, <+>)
+      x' = put_chunk(tm, y, x', "[N]", max_x, pal.yellow, bg, <+>)
+      x' = put_chunk(tm, y, x', "ame ", max_x, pal.fg, bg, <->)
+      x' = put_chunk(tm, y, x', "[S]", max_x, pal.yellow, bg, <+>)
+      x' = put_chunk(tm, y, x', "ize ", max_x, pal.fg, bg, <->)
+      x' = put_chunk(tm, y, x', "[M]", max_x, pal.yellow, bg, <+>)
+      x' = put_chunk(tm, y, x', "time ", max_x, pal.fg, bg, <->)
+      x' = put_chunk(tm, y, x', "[E]", max_x, pal.yellow, bg, <+>)
+      x' = put_chunk(tm, y, x', "xt ", max_x, pal.fg, bg, <->)
+      x' = put_chunk(tm, y, x', "[R]", max_x, pal.yellow, bg, <+>)
+      x' = put_chunk(tm, y, x', "everse ", max_x, pal.fg, bg, <->)
+      x' = put_chunk(tm, y, x', "│ ", max_x, pal.border, bg, <->)
+      x' = put_chunk(tm, y, x', "View: ", max_x, pal.cyan, bg, <+>)
+      x' = put_chunk(tm, y, x', "[H]", max_x, pal.yellow, bg, <+>)
+      x' = put_chunk(tm, y, x', "idden ", max_x, pal.fg, bg, <->)
+      x' = put_chunk(tm, y, x', "│ ", max_x, pal.border, bg, <->)
+      x' = put_chunk(tm, y, x', "Sel: ", max_x, pal.green, bg, <+>)
+      x' = put_chunk(tm, y, x', "[A]", max_x, pal.yellow, bg, <+>)
+      x' = put_chunk(tm, y, x', "ll ", max_x, pal.fg, bg, <->)
+      x' = put_chunk(tm, y, x', "[I]", max_x, pal.yellow, bg, <+>)
+      x' = put_chunk(tm, y, x', "nvert ", max_x, pal.fg, bg, <->)
+      x' = put_chunk(tm, y, x', "[C]", max_x, pal.yellow, bg, <+>)
+      x' = put_chunk(tm, y, x', "lear", max_x, pal.fg, bg, <->)
 
    // Main layout and draw function
    draw: term::Term, State => ()
@@ -621,6 +766,10 @@
             term::put_str(tm, prompt_y, 1, " Delete " + str::from_int(n_del) + " item(s) permanently? [y/N]: ", pal.red, line_bg, term::ATTR_BOLD)
          [PROMPT_CMD]
             term::put_str(tm, prompt_y, 1, " :" + st.input_buf + "█", pal.yellow, line_bg, term::ATTR_BOLD)
+         [PROMPT_ESC]
+            term::put_str(tm, prompt_y, 1, " [Esc] Press Esc to quit, or any key to cancel", pal.yellow, line_bg, term::ATTR_BOLD)
+         [PROMPT_SEMI]
+            draw_semi_prompt(tm, prompt_y, c, pal, line_bg)
          |
             st.status_msg != "" |
                term::put_str(tm, prompt_y, 1, " " + st.status_msg, pal.green, line_bg, term::ATTR_BOLD)
