@@ -3,6 +3,7 @@
 #use io
 #use libc
 #use str
+#use utf
 #use @term
 #use "vade"
 #use "fs"
@@ -107,7 +108,8 @@ run = !=>
                            st.prompt_mode = vade::PROMPT_NONE
                            vade::draw(t, st)
                         [term::KEY_CHAR]
-                           st.input_buf += str::from_byte(ev.ch)
+                           ch_s = ev.ch < 128 | str::from_byte(ev.ch) | utf::encode_codepoint(ev.ch)
+                           st.input_buf = st.input_buf + ch_s
                            vade::draw(t, st)
                   [vade::PROMPT_MKDIR]
                      ev.code
@@ -135,7 +137,8 @@ run = !=>
                            st.prompt_mode = vade::PROMPT_NONE
                            vade::draw(t, st)
                         [term::KEY_CHAR]
-                           st.input_buf += str::from_byte(ev.ch)
+                           ch_s = ev.ch < 128 | str::from_byte(ev.ch) | utf::encode_codepoint(ev.ch)
+                           st.input_buf = st.input_buf + ch_s
                            vade::draw(t, st)
                --^
 
