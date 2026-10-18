@@ -142,11 +142,7 @@
    file_color: fs::Entry, term::Palette => Int
    file_color = ent, pal =>
       ent.is_exec | --| pal.green
-      icon::file_ext(ent.name)
-         [".dva"] pal.green
-         [".md"] pal.purple
-         [".ccl"] pal.orange
-         | pal.fg
+      | pal.fg
 
    // Draw the 4-pane cross framing with embedded headers
    draw_cross_frame: term::Term, Int, Int, Int, Int, State => ()
@@ -246,7 +242,7 @@
                // Icon & Name
                name_x' = list_c + 4
                st.show_icons |
-                  ic = icon::file_icon(ent.name, ent.is_exec, pal)
+                  ic = icon::get_icon(ent.name, ent.is_dir, ent.is_exec, pal)
                   term::set_cell(tm, y, list_c + 4, Int(ic.sym), ic.color, row_bg, 0)
                   term::set_cell(tm, y, list_c + 5, ' ', pal.fg, row_bg, 0)
                   name_x' = list_c + 6
