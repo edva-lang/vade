@@ -2,6 +2,7 @@
 
 #use str
 #use @term
+#use @syntax
 #use "fs"
 #use "icon"
 #use "preview"
@@ -281,19 +282,33 @@
       lines = preview::get_preview(full_path, sel_ent.is_dir, prev_h + st.preview_scroll + 5)
       n_lines = ?lines
 
+      // Syntax highlight if text file
+      lang_id = syntax::detect_language(sel_ent.name)
+      hl_lines = !sel_ent.is_dir | syntax::highlight_lines(lang_id, lines, pal) | (syntax::HighlightedLine){}
+
       prev_h @ row_idx =>
          y = prev_r + row_idx
          line_idx = st.preview_scroll + row_idx
          term::fill_rect(tm, y, prev_c, 1, prev_w, ' ', pal.fg, pal.bg, 0)
          line_idx < n_lines |
-            line_str = lines(line_idx)!!
-            // If text file, prepend line number
+            // If text file, prepend line number and render syntax spans
             !sel_ent.is_dir && n_lines > 0 |
                num_str = str::from_int(line_idx + 1)
                term::put_str(tm, y, prev_c + 1, num_str, pal.muted, pal.bg, 0)
                term::put_str(tm, y, prev_c + 5, "│ ", pal.border, pal.bg, 0)
-               term::put_str_clipped(tm, y, prev_c + 7, line_str, prev_w - 8, pal.fg, pal.bg, 0)
+               hl = hl_lines(line_idx)!!
+               cur_x' = prev_c + 7
+               max_x = prev_c + prev_w - 1
+               hl.spans @ sp =>
+                  cur_x' !< max_x | -->
+                  avail = max_x - cur_x'
+                  sp_len = ?sp.text
+                  sp_len > 0 |
+                     attr = sp.attr == syntax::ATTR_BOLD | term::ATTR_BOLD | 0
+                     term::put_str_clipped(tm, y, cur_x', sp.text, avail, sp.fg, pal.bg, attr)
+                     cur_x' = cur_x' + sp_len
             |
+               line_str = lines(line_idx)!!
                term::put_str_clipped(tm, y, prev_c + 2, line_str, prev_w - 4, pal.fg, pal.bg, 0)
 
    // Draw Bottom-Left (BL): Adaptive Selection Cart

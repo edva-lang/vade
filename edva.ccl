@@ -5,4 +5,5 @@ edva = 1.1.1+9ab5a59
 dependencies =
   term =
     path = ../term
-
+  syntax =
+    path = ../syntax
