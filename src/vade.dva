@@ -3,6 +3,7 @@
 #use str
 #use @term
 #use @syntax
+#use @syntax/token
 #use "fs"
 #use "icon"
 #use "preview"
@@ -304,7 +305,7 @@
                   avail = max_x - cur_x'
                   sp_len = ?sp.text
                   sp_len > 0 |
-                     attr = sp.attr == syntax::ATTR_BOLD | term::ATTR_BOLD | 0
+                     attr = sp.attr == token::ATTR_BOLD | term::ATTR_BOLD | 0
                      term::put_str_clipped(tm, y, cur_x', sp.text, avail, sp.fg, pal.bg, attr)
                      cur_x' = cur_x' + sp_len
             |
