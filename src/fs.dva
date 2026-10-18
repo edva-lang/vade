@@ -24,7 +24,7 @@
 
    format_size: Int, <> => String
    format_size = sz, is_d =>
-      is_d | --| "   DIR"
+      is_d | --| "DIR"
       sz
          [(_ < 1024)] str::from_int(sz) + " B"
          [(_ < 1048576)] str::from_int(sz / 1024) + " KB"

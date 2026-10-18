@@ -368,9 +368,12 @@
                perms_str = has_attrs | ent.perms | ""
                perms_len = ?perms_str
 
+               sz_col_w = has_sizes | 8 | 0
+               perms_col_w = has_attrs | 10 | 0
+
                reserved_right' = 0
-               has_sizes && sz_len > 0 | reserved_right' = reserved_right' + sz_len + 1
-               has_attrs && perms_len > 0 | reserved_right' = reserved_right' + perms_len + 1
+               has_sizes | reserved_right' = reserved_right' + sz_col_w + 1
+               has_attrs | reserved_right' = reserved_right' + perms_col_w + 1
 
                avail_w = %max(list_w - (name_x' - list_c) - reserved_right', 4)
                ent.is_dir
@@ -382,7 +385,7 @@
 
                // Right suffixes: [attributes] [size]
                has_attrs && perms_len > 0 |
-                  attr_x = list_c + list_w - sz_len - 1 - perms_len
+                  attr_x = list_c + list_w - sz_col_w - (has_sizes | 1 | 0) - perms_col_w
                   attr_x > (name_x' + 4) |
                      term::put_str(tm, y, attr_x, perms_str, pal.muted, row_bg, 0)
 
