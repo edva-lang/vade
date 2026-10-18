@@ -516,6 +516,8 @@
          [0xFF] pal.red
          [0x80] pal.yellow
          [(_ !< 32 && _ !> 126)] pal.fg
+         [< 32] pal.cyan
+         [127] pal.cyan
          | pal.purple
 
    draw_hex_preview: term::Term, State, String, Int, Int, Int, Int => ()
