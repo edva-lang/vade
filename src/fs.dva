@@ -240,14 +240,14 @@
    // File operations
    create_file: String => <>
    create_file = p =>
-      fd = libc::open(p, 577) // O_WRONLY | O_CREAT | O_TRUNC (01000 | 0100 | 01)
-      fd < 0 | --| <->
+      fd = libc::open_mode(p, 577, 0o644) // O_WRONLY | O_CREAT | O_TRUNC, 0644
+      fd < 0 |->
       libc::close(fd)
       <+>
 
    create_dir: String => <>
    create_dir = p =>
-      rc = mkdir(p, 493) // 0755
+      rc = mkdir(p, 0o755)
       rc == 0
 
    rename_path: String, String => <>
@@ -263,8 +263,8 @@
    copy_file: String, String => <>
    copy_file = src, dst =>
       s_fd = libc::open(src, 0) // O_RDONLY
-      s_fd < 0 | --| <->
-      d_fd = libc::open(dst, 577) // O_WRONLY | O_CREAT | O_TRUNC
+      s_fd < 0 |->
+      d_fd = libc::open_mode(dst, 577, 0o644) // O_WRONLY | O_CREAT | O_TRUNC, 0644
       d_fd < 0 |
          libc::close(s_fd)
          --| <->

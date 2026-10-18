@@ -18,6 +18,9 @@
    PROMPT_CMD    = 4
    PROMPT_ESC    = 5
    PROMPT_SEMI   = 6
+   PROMPT_SHELL  = 7
+   PROMPT_CHDIR  = 8
+   PROMPT_FILTER = 9
 
    SORT_NAME  = 0
    SORT_SIZE  = 1
@@ -92,6 +95,8 @@
       op_mode: Int,
       prompt_mode: Int,
       input_buf: String,
+      input_cursor: Int,
+      filter_str: String,
       status_msg: String,
       history: (String){},
       history_slot: Int,
@@ -120,6 +125,8 @@
          <->,
          OP_NONE,
          PROMPT_NONE,
+         "",
+         0,
          "",
          "",
          hist,
@@ -158,12 +165,13 @@
       old_p = st.path
       st.prev_path = old_p
       st.path = real_p
-      st.entries = fs::list_dir(real_p, st.show_hidden, st.sort_mode, st.sort_rev)
+      st.filter_str = ""
       st.selected = 0
       st.scroll = 0
       st.preview_scroll = 0
       st.last_jump_key = -1
       push_history(st, old_p)
+      reload_dir(st)
 
    go_home: State => ()
    go_home = st =>
@@ -237,10 +245,81 @@
          [SORT_EXT] "ext"
          | "name"
 
+   trim_str: String => String
+   trim_str = s =>
+      len = ?s
+      len == 0 | --| ""
+      start' = 0
+      len @ i =>
+         s(i) == ' ' && start' == i | start' = i + 1
+      start' !< len | --| ""
+      end' = len
+      len @ j =>
+         idx = len - 1 - j
+         s(idx) == ' ' && end' == idx + 1 | end' = idx
+      s(start'..end')
+
+   to_lower_byte: Int => Int
+   to_lower_byte = b =>
+      b !< 65 && b !> 90 | b + 32 | b
+
+   match_substring_ci: String, String => <>
+   match_substring_ci = haystack, needle =>
+      hlen = ?haystack
+      nlen = ?needle
+      nlen == 0 | --| <+>
+      nlen > hlen | --| <->
+      max_start = hlen - nlen
+      found' = <->
+      (max_start + 1) @ i =>
+         match' = <+>
+         nlen @ j =>
+            hb = to_lower_byte(haystack(i + j))
+            nb = to_lower_byte(needle(j))
+            hb != nb |
+               match' = <->
+               -->
+         match' |
+            found' = <+>
+            -->
+      found'
+
+   prev_char_pos: String, Int => Int
+   prev_char_pos = s, pos =>
+      pos !> 0 | --| 0
+      p' = pos - 1
+      0..3 @
+         p' !> 0 | -->
+         (s(p') .&. 0xC0) == 0x80 | p' = p' - 1
+         | -->
+      %max(0, p')
+
+   next_char_pos: String, Int => Int
+   next_char_pos = s, pos =>
+      len = ?s
+      pos !< len | --| len
+      b = s(pos)
+      step' = 1
+      (b .&. 0x80) == 0 | step' = 1
+      (b .&. 0xE0) == 0xC0 | step' = 2
+      (b .&. 0xF0) == 0xE0 | step' = 3
+      (b .&. 0xF8) == 0xF0 | step' = 4
+      %min(len, pos + step')
+
    reload_dir: State => ()
    reload_dir = st =>
       cur_name = ?st.entries > 0 | st.entries(st.selected)!!.name | ""
-      st.entries = fs::list_dir(st.path, st.show_hidden, st.sort_mode, st.sort_rev)
+      all_entries = fs::list_dir(st.path, st.show_hidden, st.sort_mode, st.sort_rev)
+      st.filter_str != ""
+         |
+            filtered = (fs::Entry){}
+            all_entries @ ent =>
+               match_substring_ci(ent.name, st.filter_str) |
+                  filtered += ent
+            st.entries = filtered
+         |
+            st.entries = all_entries
+
       n = ?st.entries
       n == 0 |
          st.selected = 0
@@ -344,6 +423,83 @@
       ent.is_exec | --| pal.green
       | pal.fg
 
+   format_file_arg: String => String
+   format_file_arg = name =>
+      has_space' = <->
+      ?name @ i =>
+         name(i) == ' ' |
+            has_space' = <+>
+            -->
+      has_space' | "\"" + name + "\"" | name
+
+   insert_hovered_name: State => ()
+   insert_hovered_name = st =>
+      ?st.entries == 0 | --|
+      sel_ent = st.entries(st.selected)!!
+      arg = format_file_arg(sel_ent.name)
+      cur = %clamp(st.input_cursor, 0, ?st.input_buf)
+      sep = (cur > 0 && st.input_buf(cur - 1) != ' ') | " " | ""
+      to_ins = sep + arg
+      st.input_buf = st.input_buf(..cur) + to_ins + st.input_buf(cur..)
+      st.input_cursor = cur + ?to_ins
+
+   set_prompt: State, Int, String => ()
+   set_prompt = st, mode, init_text =>
+      st.prompt_mode = mode
+      st.input_buf = init_text
+      st.input_cursor = ?init_text
+
+   prompt_insert_char: State, String => ()
+   prompt_insert_char = st, ch_s =>
+      cur = %clamp(st.input_cursor, 0, ?st.input_buf)
+      st.input_buf = st.input_buf(..cur) + ch_s + st.input_buf(cur..)
+      st.input_cursor = cur + ?ch_s
+
+   prompt_backspace: State => <>
+   prompt_backspace = st =>
+      cur = %clamp(st.input_cursor, 0, ?st.input_buf)
+      cur !> 0 | --| <->
+      prev = prev_char_pos(st.input_buf, cur)
+      st.input_buf = st.input_buf(..prev) + st.input_buf(cur..)
+      st.input_cursor = prev
+      <+>
+
+   prompt_delete: State => <>
+   prompt_delete = st =>
+      cur = %clamp(st.input_cursor, 0, ?st.input_buf)
+      cur !< ?st.input_buf | --| <->
+      nxt = next_char_pos(st.input_buf, cur)
+      st.input_buf = st.input_buf(..cur) + st.input_buf(nxt..)
+      <+>
+
+   prompt_move_left: State => ()
+   prompt_move_left = st =>
+      st.input_cursor = prev_char_pos(st.input_buf, st.input_cursor)
+
+   prompt_move_right: State => ()
+   prompt_move_right = st =>
+      st.input_cursor = next_char_pos(st.input_buf, st.input_cursor)
+
+   prompt_home: State => ()
+   prompt_home = st =>
+      st.input_cursor = 0
+
+   prompt_end: State => ()
+   prompt_end = st =>
+      st.input_cursor = ?st.input_buf
+
+   resolve_nav_path: State, String => String
+   resolve_nav_path = st, input_p =>
+      p = trim_str(input_p)
+      p == "" || p == "~" | --| fs::get_home!
+      p == "-" | --| (st.prev_path != "" | st.prev_path | st.path)
+      ?p !< 2 && p(..2) == "~/" |
+         home = fs::get_home!
+         --| fs::resolve_path(fs::join_path(home, p(2..)))
+      p(0) == '/' |
+         --| fs::resolve_path(p)
+      fs::resolve_path(fs::join_path(st.path, p))
+
    // Draw adaptive framing with embedded headers based on layout tiers
    draw_adaptive_frame: term::Term, Layout, State => ()
    draw_adaptive_frame = tm, lay, st =>
@@ -413,15 +569,21 @@
          rem_w = rem_w - sb_len - 1
          st.show_hidden && rem_w > 5 |
             term::put_str_clipped(tm, 0, badge_x', " . ", rem_w, pal.purple, pal.surface, term::ATTR_BOLD)
+            badge_x' = badge_x' + 4
+            rem_w = rem_w - 4
+         st.filter_str != "" && rem_w > 5 |
+            f_badge = " /" + st.filter_str + " "
+            term::put_str_clipped(tm, 0, badge_x', f_badge, rem_w, pal.green, pal.surface, term::ATTR_BOLD)
 
       // Top-Right: Previewed item title (if has_right)
       lay.has_right |
          tr_title = ?st.entries > 0
             |
                ent = st.entries(st.selected)!!
-               " Preview: " + ent.name + " (" + ent.fmt_size + ") "
-            | " Preview "
-         term::put_str_clipped(tm, 0, split_c + 2, tr_title, cols - split_c - 4, pal.yellow, pal.surface, term::ATTR_BOLD)
+               " " + ent.name + " (" + ent.fmt_size + ") "
+            | ""
+         ?tr_title > 0 |
+            term::put_str_clipped(tm, 0, split_c + 2, tr_title, cols - split_c - 4, pal.yellow, pal.surface, term::ATTR_BOLD)
 
       // Bottom dividers titles (if has_bottom)
       lay.has_bottom |
@@ -620,7 +782,8 @@
 
       sel_ent = st.entries(st.selected)!!
       full_path = fs::join_path(st.path, sel_ent.name)
-      !sel_ent.is_dir && preview::is_binary_file(full_path) |
+      is_archive = !sel_ent.is_dir && preview::is_archive_path(full_path)
+      !sel_ent.is_dir && preview::is_binary_file(full_path) && !is_archive |
          draw_hex_preview(tm, st, full_path, prev_r, prev_c, prev_h, prev_w)
          --|
       lines = preview::get_preview(full_path, sel_ent.is_dir, prev_h + st.preview_scroll + 5)
@@ -632,15 +795,16 @@
          --|
 
       // Syntax highlight if text file
+      is_text = !sel_ent.is_dir && !is_archive
       lang_id = syntax::detect_language(sel_ent.name)
-      hl_lines = !sel_ent.is_dir | syntax::highlight_lines(lang_id, lines, pal) | (syntax::HighlightedLine){}
+      hl_lines = is_text | syntax::highlight_lines(lang_id, lines, pal) | (syntax::HighlightedLine){}
 
       prev_h @ row_idx =>
          y = prev_r + row_idx
          line_idx = st.preview_scroll + row_idx
          line_idx < n_lines |
             // If text file, prepend line number and render syntax spans
-            !sel_ent.is_dir && n_lines > 0 |
+            is_text && n_lines > 0 |
                num_str = str::from_int(line_idx + 1)
                term::put_str(tm, y, prev_c + 1, num_str, pal.muted, pal.bg, 0)
                term::put_str(tm, y, prev_c + 5, "│ ", pal.border, pal.bg, 0)
@@ -745,7 +909,7 @@
       c = tm.cols
       pal = st.pal
 
-      h = 22
+      h = 25
       w = 64
       top = %max((r - h) / 2, 1)
       left = %max((c - w) / 2, 2)
@@ -762,8 +926,11 @@
       keys += "1..5         Fast cd to history directory"
       keys += "~            Jump to Home directory"
       keys += "-            Jump to Previous directory"
-      keys += ";            View/Sort/Select menu (Name, Size, Mtime, Ext, Reverse, Hidden, All, Invert, Clear)"
-      keys += "Esc          Prompt cancel / Press Esc-Esc to quit"
+      keys += ">            Change directory directly (path prompt)"
+      keys += "/            Filter files in active view (live search)"
+      keys += ";            Sort, view & selection options"
+      keys += "'            Shell command (Ctrl-Enter / Tab pastes file)"
+      keys += "Esc          Prompt cancel / Clear filter / Esc-Esc to quit"
       keys += ":            Command line (:cd, :q, etc.)"
       keys += "Shift-↑/↓    Scroll Preview pane (Alt-J/K)"
       keys += "F1           Toggle this Help dialog"
@@ -815,6 +982,27 @@
       x' = put_chunk(tm, y, x', "C", max_x, pal.yellow, bg, <+>)
       x' = put_chunk(tm, y, x', "lear", max_x, pal.fg, bg, <->)
 
+   draw_input_prompt: term::Term, Int, Int, String, String, Int, Int, Int, Int => ()
+   draw_input_prompt = tm, y, cols, prefix, buf, cur_pos, pfx_col, fg, bg =>
+      term::put_str(tm, y, 1, prefix, pfx_col, bg, term::ATTR_BOLD)
+      start_c = 1 + ?prefix
+      cur = %clamp(cur_pos, 0, ?buf)
+      cur > 0 |
+         term::put_str(tm, y, start_c, buf(..cur), fg, bg, 0)
+      cur_col' = start_c
+      cur > 0 |
+         buf(..cur) @@ r =>
+            cur_col' = cur_col' + 1
+      cur < ?buf
+         |
+            nxt = next_char_pos(buf, cur)
+            ch_str = buf(cur..nxt)
+            term::put_str(tm, y, cur_col', ch_str, fg, bg, term::ATTR_REVERSE)
+            nxt < ?buf |
+               term::put_str(tm, y, cur_col' + 1, buf(nxt..), fg, bg, 0)
+         |
+            term::put_str(tm, y, cur_col', " ", fg, bg, term::ATTR_REVERSE)
+
    // Main layout and draw function
    draw: term::Term, State => ()
    draw = tm, st =>
@@ -830,7 +1018,8 @@
       st.full_preview && grid_h > 2 && c > 10
          |
             term::draw_box(tm, 0, 0, grid_h, c, term::BORDER_ROUNDED, pal.border, pal.bg)
-            term::put_str(tm, 0, 2, " Full Preview (F3 to exit) ", pal.yellow, pal.surface, term::ATTR_BOLD)
+            fp_title = ?st.entries > 0 | " " + st.entries(st.selected)!!.name + " (F3 to exit) " | " (F3 to exit) "
+            term::put_str_clipped(tm, 0, 2, fp_title, c - 4, pal.yellow, pal.surface, term::ATTR_BOLD)
             draw_preview(tm, st, 1, 1, grid_h - 2, c - 2)
          |
             grid_h > 2 && c > 6 |
@@ -860,21 +1049,31 @@
       term::fill_rect(tm, prompt_y, 0, 1, c, ' ', pal.fg, line_bg, 0)
       st.prompt_mode
          [PROMPT_RENAME]
-            term::put_str(tm, prompt_y, 1, " Rename: " + st.input_buf + "█", pal.yellow, line_bg, term::ATTR_BOLD)
+            draw_input_prompt(tm, prompt_y, c, " Rename: ", st.input_buf, st.input_cursor, pal.yellow, pal.fg, line_bg)
          [PROMPT_MKDIR]
-            term::put_str(tm, prompt_y, 1, " Create (name ending in / creates dir): " + st.input_buf + "█", pal.cyan, line_bg, term::ATTR_BOLD)
+            draw_input_prompt(tm, prompt_y, c, " Create (name ending in / creates dir): ", st.input_buf, st.input_cursor, pal.cyan, pal.fg, line_bg)
          [PROMPT_DELETE]
             n_del = ?st.cart > 0 | ?st.cart | 1
             term::put_str(tm, prompt_y, 1, " Delete " + str::from_int(n_del) + " item(s) permanently? [y/N]: ", pal.red, line_bg, term::ATTR_BOLD)
          [PROMPT_CMD]
-            term::put_str(tm, prompt_y, 1, " :" + st.input_buf + "█", pal.yellow, line_bg, term::ATTR_BOLD)
+            draw_input_prompt(tm, prompt_y, c, " :", st.input_buf, st.input_cursor, pal.yellow, pal.fg, line_bg)
          [PROMPT_ESC]
             term::put_str(tm, prompt_y, 1, " [Esc] Press Esc to quit, or any key to cancel", pal.yellow, line_bg, term::ATTR_BOLD)
          [PROMPT_SEMI]
             draw_semi_prompt(tm, prompt_y, c, pal, line_bg)
+         [PROMPT_SHELL]
+            draw_input_prompt(tm, prompt_y, c, " > ", st.input_buf, st.input_cursor, pal.cyan, pal.fg, line_bg)
+         [PROMPT_CHDIR]
+            draw_input_prompt(tm, prompt_y, c, " cd: ", st.input_buf, st.input_cursor, pal.cyan, pal.fg, line_bg)
+         [PROMPT_FILTER]
+            draw_input_prompt(tm, prompt_y, c, " /", st.input_buf, st.input_cursor, pal.yellow, pal.fg, line_bg)
          |
-            st.status_msg != "" |
-               term::put_str(tm, prompt_y, 1, " " + st.status_msg, pal.green, line_bg, term::ATTR_BOLD)
+            st.status_msg != ""
+               |
+                  term::put_str(tm, prompt_y, 1, " " + st.status_msg, pal.green, line_bg, term::ATTR_BOLD)
+               |
+                  st.filter_str != "" |
+                     term::put_str(tm, prompt_y, 1, " filter: /" + st.filter_str + " (Esc to clear, / to edit)", pal.yellow, line_bg, 0)
 
       // 7. Modal overlays
       st.show_help | draw_help_modal(tm, st)

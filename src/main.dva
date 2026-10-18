@@ -26,7 +26,7 @@ edit_file: term::Term, vade::State, String => ()
 edit_file = t, st, full_path =>
    term::disable_raw(t)
    term::show_cursor(t)
-   libc::system("${EDITOR:-nano} \"" + full_path + "\"")
+   libc::system("COLORTERM=${COLORTERM:-truecolor} ${EDITOR:-nano} \"" + full_path + "\"")
    term::enable_raw(t)
    term::enable_mouse(t)
    term::hide_cursor(t)
@@ -77,16 +77,22 @@ run = !=>
                                  n_c = ?st.cart
                                  n_c > 0
                                     |
+                                       err_cnt' = 0
                                        st.cart @ item =>
-                                          fs::delete_entry(item.path, item.is_dir)
+                                          ok = fs::delete_entry(item.path, item.is_dir)
+                                          !ok | err_cnt' = err_cnt' + 1
                                        st.cart = (vade::CartItem){}
-                                       st.status_msg = "Deleted " + str::from_int(n_c) + " staged item(s)."
+                                       err_cnt' == 0
+                                          | st.status_msg = "Deleted " + str::from_int(n_c) + " staged item(s)."
+                                          | st.status_msg = "Failed to delete " + str::from_int(err_cnt') + " item(s)."
                                     |
                                        ?st.entries > 0 |
                                           del_ent = st.entries(st.selected)!!
                                           del_path = fs::join_path(st.path, del_ent.name)
-                                          fs::delete_entry(del_path, del_ent.is_dir)
-                                          st.status_msg = "Deleted " + del_ent.name
+                                          ok = fs::delete_entry(del_path, del_ent.is_dir)
+                                          ok
+                                             | st.status_msg = "Deleted " + del_ent.name
+                                             | st.status_msg = "Failed to delete " + del_ent.name
                                  vade::reload_dir(st)
                                  st.selected = %min(st.selected, %max(?st.entries - 1, 0))
                                  st.prompt_mode = vade::PROMPT_NONE
@@ -95,7 +101,7 @@ run = !=>
                                  st.prompt_mode = vade::PROMPT_NONE
                                  st.status_msg = "Deletion cancelled."
                                  vade::draw(t, st)
-                        [term::KEY_ESC]
+                        [term::KEY_ESC, term::KEY_ENTER]
                            st.prompt_mode = vade::PROMPT_NONE
                            st.status_msg = "Deletion cancelled."
                            vade::draw(t, st)
@@ -103,15 +109,28 @@ run = !=>
                      ev.code
                         [term::KEY_ESC]
                            st.prompt_mode = vade::PROMPT_NONE
-                           st.status_msg = ""
+                           st.status_msg = "Cancelled"
+                           vade::draw(t, st)
+                        [term::KEY_LEFT]
+                           vade::prompt_move_left(st)
+                           vade::draw(t, st)
+                        [term::KEY_RIGHT]
+                           vade::prompt_move_right(st)
+                           vade::draw(t, st)
+                        [term::KEY_HOME]
+                           vade::prompt_home(st)
+                           vade::draw(t, st)
+                        [term::KEY_END]
+                           vade::prompt_end(st)
                            vade::draw(t, st)
                         [term::KEY_BACKSPACE]
-                           len = ?st.input_buf
-                           len > 0 |
-                              st.input_buf = st.input_buf(..(len - 1))
-                              vade::draw(t, st)
+                           vade::prompt_backspace(st)
+                           vade::draw(t, st)
+                        [term::KEY_DELETE]
+                           vade::prompt_delete(st)
+                           vade::draw(t, st)
                         [term::KEY_ENTER]
-                           new_name = st.input_buf
+                           new_name = vade::trim_str(st.input_buf)
                            new_name != "" && ?st.entries > 0 |
                               old_ent = st.entries(st.selected)!!
                               old_p = fs::join_path(st.path, old_ent.name)
@@ -124,21 +143,34 @@ run = !=>
                            vade::draw(t, st)
                         [term::KEY_CHAR]
                            ch_s = ev.ch < 128 | str::from_byte(ev.ch) | utf::encode_codepoint(ev.ch)
-                           st.input_buf = st.input_buf + ch_s
+                           vade::prompt_insert_char(st, ch_s)
                            vade::draw(t, st)
                   [vade::PROMPT_MKDIR]
                      ev.code
                         [term::KEY_ESC]
                            st.prompt_mode = vade::PROMPT_NONE
-                           st.status_msg = ""
+                           st.status_msg = "Cancelled"
+                           vade::draw(t, st)
+                        [term::KEY_LEFT]
+                           vade::prompt_move_left(st)
+                           vade::draw(t, st)
+                        [term::KEY_RIGHT]
+                           vade::prompt_move_right(st)
+                           vade::draw(t, st)
+                        [term::KEY_HOME]
+                           vade::prompt_home(st)
+                           vade::draw(t, st)
+                        [term::KEY_END]
+                           vade::prompt_end(st)
                            vade::draw(t, st)
                         [term::KEY_BACKSPACE]
-                           len = ?st.input_buf
-                           len > 0 |
-                              st.input_buf = st.input_buf(..(len - 1))
-                              vade::draw(t, st)
+                           vade::prompt_backspace(st)
+                           vade::draw(t, st)
+                        [term::KEY_DELETE]
+                           vade::prompt_delete(st)
+                           vade::draw(t, st)
                         [term::KEY_ENTER]
-                           target = st.input_buf
+                           target = vade::trim_str(st.input_buf)
                            target != "" |
                               full_p = fs::join_path(st.path, target)
                               t_len = ?target
@@ -153,56 +185,255 @@ run = !=>
                            vade::draw(t, st)
                         [term::KEY_CHAR]
                            ch_s = ev.ch < 128 | str::from_byte(ev.ch) | utf::encode_codepoint(ev.ch)
-                           st.input_buf = st.input_buf + ch_s
+                           vade::prompt_insert_char(st, ch_s)
                            vade::draw(t, st)
                   [vade::PROMPT_CMD]
                      ev.code
                         [term::KEY_ESC]
                            st.prompt_mode = vade::PROMPT_NONE
-                           st.status_msg = ""
+                           st.status_msg = "Cancelled"
+                           vade::draw(t, st)
+                        [term::KEY_LEFT]
+                           vade::prompt_move_left(st)
+                           vade::draw(t, st)
+                        [term::KEY_RIGHT]
+                           vade::prompt_move_right(st)
+                           vade::draw(t, st)
+                        [term::KEY_HOME]
+                           vade::prompt_home(st)
+                           vade::draw(t, st)
+                        [term::KEY_END]
+                           vade::prompt_end(st)
                            vade::draw(t, st)
                         [term::KEY_BACKSPACE]
-                           len = ?st.input_buf
-                           len > 0
-                              |
-                                 st.input_buf = st.input_buf(..(len - 1))
-                                 vade::draw(t, st)
+                           ?st.input_buf == 0
                               |
                                  st.prompt_mode = vade::PROMPT_NONE
                                  vade::draw(t, st)
+                              |
+                                 vade::prompt_backspace(st)
+                                 vade::draw(t, st)
+                        [term::KEY_DELETE]
+                           vade::prompt_delete(st)
+                           vade::draw(t, st)
+                        [term::KEY_TAB, term::KEY_CTRL]
+                           vade::insert_hovered_name(st)
+                           vade::draw(t, st)
                         [term::KEY_ENTER]
-                           cmd = trim_str(st.input_buf)
+                           (ev.mods .&. term::MOD_CTRL) != 0
+                              |
+                                 vade::insert_hovered_name(st)
+                                 vade::draw(t, st)
+                              |
+                                 cmd = vade::trim_str(st.input_buf)
+                                 st.prompt_mode = vade::PROMPT_NONE
+                                 cmd == "q" || cmd == "quit" || cmd == "exit" | -->
+                                 cmd == "help" | st.show_help = <+>
+                                 cmd == "home" || cmd == "~" | vade::go_home(st)
+                                 cmd == "-" | vade::go_prev_dir(st)
+                                 ?cmd !< 3 && cmd(..3) == "cd " |
+                                    target = vade::trim_str(cmd(3..))
+                                    dest = vade::resolve_nav_path(st, target)
+                                    dp = libc::opendir(dest)
+                                    dp == 0
+                                       | st.status_msg = "Cannot open directory: " + target
+                                       |
+                                          libc::closedir(dp)
+                                          vade::set_dir(st, dest)
+                                          st.status_msg = "cd: " + vade::abbrev_path(dest)
+                                 ?cmd !< 6 && cmd(..6) == "mkdir " |
+                                    dname = vade::trim_str(cmd(6..))
+                                    full_p = fs::join_path(st.path, dname)
+                                    fs::create_dir(full_p)
+                                    vade::reload_dir(st)
+                                    st.status_msg = "Created directory: " + dname
+                                 ?cmd !< 6 && cmd(..6) == "touch " |
+                                    fname = vade::trim_str(cmd(6..))
+                                    full_p = fs::join_path(st.path, fname)
+                                    fs::create_file(full_p)
+                                    vade::reload_dir(st)
+                                    st.status_msg = "Created file: " + fname
+                                 cmd == "" | st.status_msg = ""
+                                 vade::draw(t, st)
+                        [term::KEY_CHAR]
+                           ch_s = ev.ch < 128 | str::from_byte(ev.ch) | utf::encode_codepoint(ev.ch)
+                           vade::prompt_insert_char(st, ch_s)
+                           vade::draw(t, st)
+                  [vade::PROMPT_SHELL]
+                     ev.code
+                        [term::KEY_ESC]
                            st.prompt_mode = vade::PROMPT_NONE
-                           cmd == "q" || cmd == "quit" || cmd == "exit" | -->
-                           cmd == "help" | st.show_help = <+>
-                           cmd == "home" || cmd == "~" | vade::go_home(st)
-                           cmd == "-" | vade::go_prev_dir(st)
-                           ?cmd !< 3 && cmd(..3) == "cd " |
-                              target = trim_str(cmd(3..))
-                              target == "" || target == "~"
-                                 | vade::go_home(st)
-                                 | target == "-"
-                                    | vade::go_prev_dir(st)
-                                    | target(0) == '/'
-                                       | vade::set_dir(st, target)
-                                       | vade::set_dir(st, fs::join_path(st.path, target))
-                           ?cmd !< 6 && cmd(..6) == "mkdir " |
-                              dname = trim_str(cmd(6..))
-                              full_p = fs::join_path(st.path, dname)
-                              fs::create_dir(full_p)
-                              vade::reload_dir(st)
-                              st.status_msg = "Created directory: " + dname
-                           ?cmd !< 6 && cmd(..6) == "touch " |
-                              fname = trim_str(cmd(6..))
-                              full_p = fs::join_path(st.path, fname)
-                              fs::create_file(full_p)
-                              vade::reload_dir(st)
-                              st.status_msg = "Created file: " + fname
-                           cmd == "" | st.status_msg = ""
+                           st.status_msg = "Cancelled"
+                           vade::draw(t, st)
+                        [term::KEY_LEFT]
+                           vade::prompt_move_left(st)
+                           vade::draw(t, st)
+                        [term::KEY_RIGHT]
+                           vade::prompt_move_right(st)
+                           vade::draw(t, st)
+                        [term::KEY_HOME]
+                           vade::prompt_home(st)
+                           vade::draw(t, st)
+                        [term::KEY_END]
+                           vade::prompt_end(st)
+                           vade::draw(t, st)
+                        [term::KEY_BACKSPACE]
+                           ?st.input_buf == 0
+                              |
+                                 st.prompt_mode = vade::PROMPT_NONE
+                                 st.status_msg = "Cancelled"
+                                 vade::draw(t, st)
+                              |
+                                 vade::prompt_backspace(st)
+                                 vade::draw(t, st)
+                        [term::KEY_DELETE]
+                           vade::prompt_delete(st)
+                           vade::draw(t, st)
+                        [term::KEY_TAB, term::KEY_CTRL]
+                           vade::insert_hovered_name(st)
+                           vade::draw(t, st)
+                        [term::KEY_ENTER]
+                           (ev.mods .&. term::MOD_CTRL) != 0
+                              |
+                                 vade::insert_hovered_name(st)
+                                 vade::draw(t, st)
+                              |
+                                 cmd = vade::trim_str(st.input_buf)
+                                 st.prompt_mode = vade::PROMPT_NONE
+                                 cmd != "" |
+                                    term::disable_raw(t)
+                                    term::show_cursor(t)
+                                    shell_cmd = "cd \"" + st.path + "\" && " + cmd
+                                    libc::system(shell_cmd)
+                                    msg = "\n\e[33m[Press any key to return to vade]\e[0m"
+                                    libc::write(1, msg, ?msg)
+                                    libc::tcsetattr(0, 0, t.raw_termios)
+                                    pause_buf = {8}
+                                    libc::read(0, &pause_buf, 1)
+                                    term::enable_raw(t)
+                                    term::enable_mouse(t)
+                                    term::hide_cursor(t)
+                                    term::force_redraw(t)
+                                    vade::reload_dir(st)
+                                 vade::draw(t, st)
+                        [term::KEY_CHAR]
+                           ch_s = ev.ch < 128 | str::from_byte(ev.ch) | utf::encode_codepoint(ev.ch)
+                           vade::prompt_insert_char(st, ch_s)
+                           vade::draw(t, st)
+                  [vade::PROMPT_CHDIR]
+                     ev.code
+                        [term::KEY_ESC]
+                           st.prompt_mode = vade::PROMPT_NONE
+                           st.status_msg = "Cancelled"
+                           vade::draw(t, st)
+                        [term::KEY_LEFT]
+                           vade::prompt_move_left(st)
+                           vade::draw(t, st)
+                        [term::KEY_RIGHT]
+                           vade::prompt_move_right(st)
+                           vade::draw(t, st)
+                        [term::KEY_HOME]
+                           vade::prompt_home(st)
+                           vade::draw(t, st)
+                        [term::KEY_END]
+                           vade::prompt_end(st)
+                           vade::draw(t, st)
+                        [term::KEY_BACKSPACE]
+                           ?st.input_buf == 0
+                              |
+                                 st.prompt_mode = vade::PROMPT_NONE
+                                 vade::draw(t, st)
+                              |
+                                 vade::prompt_backspace(st)
+                                 vade::draw(t, st)
+                        [term::KEY_DELETE]
+                           vade::prompt_delete(st)
+                           vade::draw(t, st)
+                        [term::KEY_TAB, term::KEY_CTRL]
+                           vade::insert_hovered_name(st)
+                           vade::draw(t, st)
+                        [term::KEY_ENTER]
+                           (ev.mods .&. term::MOD_CTRL) != 0
+                              |
+                                 vade::insert_hovered_name(st)
+                                 vade::draw(t, st)
+                              |
+                                 target = vade::trim_str(st.input_buf)
+                                 st.prompt_mode = vade::PROMPT_NONE
+                                 dest = vade::resolve_nav_path(st, target)
+                                 dp = libc::opendir(dest)
+                                 dp == 0
+                                    |
+                                       st.status_msg = "Cannot open directory: " + (target != "" | target | dest)
+                                    |
+                                       libc::closedir(dp)
+                                       vade::set_dir(st, dest)
+                                       st.status_msg = "cd: " + vade::abbrev_path(dest)
+                                 vade::draw(t, st)
+                        [term::KEY_CHAR]
+                           ch_s = ev.ch < 128 | str::from_byte(ev.ch) | utf::encode_codepoint(ev.ch)
+                           vade::prompt_insert_char(st, ch_s)
+                           vade::draw(t, st)
+                  [vade::PROMPT_FILTER]
+                     ev.code
+                        [term::KEY_ESC]
+                           st.prompt_mode = vade::PROMPT_NONE
+                           st.filter_str = ""
+                           st.status_msg = "Filter cleared"
+                           vade::reload_dir(st)
+                           vade::draw(t, st)
+                        [term::KEY_LEFT]
+                           vade::prompt_move_left(st)
+                           vade::draw(t, st)
+                        [term::KEY_RIGHT]
+                           vade::prompt_move_right(st)
+                           vade::draw(t, st)
+                        [term::KEY_HOME]
+                           vade::prompt_home(st)
+                           vade::draw(t, st)
+                        [term::KEY_END]
+                           vade::prompt_end(st)
+                           vade::draw(t, st)
+                        [term::KEY_UP]
+                           vade::move_cursor(st, -1, visible_h)
+                           vade::draw(t, st)
+                        [term::KEY_DOWN]
+                           vade::move_cursor(st, 1, visible_h)
+                           vade::draw(t, st)
+                        [term::KEY_PAGE_UP]
+                           vade::move_cursor(st, -visible_h, visible_h)
+                           vade::draw(t, st)
+                        [term::KEY_PAGE_DOWN]
+                           vade::move_cursor(st, visible_h, visible_h)
+                           vade::draw(t, st)
+                        [term::KEY_BACKSPACE]
+                           ?st.input_buf == 0
+                              |
+                                 st.prompt_mode = vade::PROMPT_NONE
+                                 st.filter_str = ""
+                                 vade::reload_dir(st)
+                                 vade::draw(t, st)
+                              |
+                                 vade::prompt_backspace(st)
+                                 st.filter_str = st.input_buf
+                                 vade::reload_dir(st)
+                                 vade::draw(t, st)
+                        [term::KEY_DELETE]
+                           vade::prompt_delete(st)
+                           st.filter_str = st.input_buf
+                           vade::reload_dir(st)
+                           vade::draw(t, st)
+                        [term::KEY_ENTER]
+                           st.prompt_mode = vade::PROMPT_NONE
+                           st.filter_str = st.input_buf
+                           cnt = ?st.entries
+                           st.status_msg = (st.filter_str != "" | "Filter: /" + st.filter_str + " (" + str::from_int(cnt) + " matches)" | "")
                            vade::draw(t, st)
                         [term::KEY_CHAR]
                            ch_s = ev.ch < 128 | str::from_byte(ev.ch) | utf::encode_codepoint(ev.ch)
-                           st.input_buf = st.input_buf + ch_s
+                           vade::prompt_insert_char(st, ch_s)
+                           st.filter_str = st.input_buf
+                           vade::reload_dir(st)
                            vade::draw(t, st)
                   [vade::PROMPT_ESC]
                      st.prompt_mode = vade::PROMPT_NONE
@@ -217,8 +448,7 @@ run = !=>
                               ['2']
                                  ?st.entries > 0 |
                                     sel_ent = st.entries(st.selected)!!
-                                    st.prompt_mode = vade::PROMPT_RENAME
-                                    st.input_buf = sel_ent.name
+                                    vade::set_prompt(st, vade::PROMPT_RENAME, sel_ent.name)
                                     vade::draw(t, st)
                               ['3']
                                  st.full_preview = !st.full_preview
@@ -238,8 +468,7 @@ run = !=>
                                  st.status_msg = "Staged for move. Navigate to dest and press Enter/F6."
                                  vade::draw(t, st)
                               ['7']
-                                 st.prompt_mode = vade::PROMPT_MKDIR
-                                 st.input_buf = ""
+                                 vade::set_prompt(st, vade::PROMPT_MKDIR, "")
                                  vade::draw(t, st)
                               ['8']
                                  ?st.entries > 0 || ?st.cart > 0 |
@@ -248,12 +477,17 @@ run = !=>
                               ['9']
                                  -->
                               |
+                                 st.status_msg = "Cancelled"
                                  vade::draw(t, st)
                         |
+                           st.status_msg = "Cancelled"
                            vade::draw(t, st)
                   [vade::PROMPT_SEMI]
                      st.prompt_mode = vade::PROMPT_NONE
                      ev.code
+                        [term::KEY_ESC]
+                           st.status_msg = "Cancelled"
+                           vade::draw(t, st)
                         [term::KEY_CHAR]
                            ev.ch
                               ['n', 'N']
@@ -302,11 +536,19 @@ run = !=>
                         vade::draw(t, st)
                      ['Q'] -->
                      [':']
-                        st.prompt_mode = vade::PROMPT_CMD
-                        st.input_buf = ""
+                        vade::set_prompt(st, vade::PROMPT_CMD, "")
                         vade::draw(t, st)
                      [';']
                         st.prompt_mode = vade::PROMPT_SEMI
+                        vade::draw(t, st)
+                     ['\'']
+                        vade::set_prompt(st, vade::PROMPT_SHELL, "")
+                        vade::draw(t, st)
+                     ['>']
+                        vade::set_prompt(st, vade::PROMPT_CHDIR, "")
+                        vade::draw(t, st)
+                     ['/']
+                        vade::set_prompt(st, vade::PROMPT_FILTER, st.filter_str)
                         vade::draw(t, st)
                      ['~']
                         vade::go_home(st)
@@ -334,8 +576,7 @@ run = !=>
                [term::KEY_F2]
                   ?st.entries > 0 |
                      sel_ent = st.entries(st.selected)!!
-                     st.prompt_mode = vade::PROMPT_RENAME
-                     st.input_buf = sel_ent.name
+                     vade::set_prompt(st, vade::PROMPT_RENAME, sel_ent.name)
                      vade::draw(t, st)
 
                [term::KEY_F3]
@@ -387,11 +628,10 @@ run = !=>
                         vade::draw(t, st)
 
                [term::KEY_F7]
-                  st.prompt_mode = vade::PROMPT_MKDIR
-                  st.input_buf = ""
+                  vade::set_prompt(st, vade::PROMPT_MKDIR, "")
                   vade::draw(t, st)
 
-               [term::KEY_F8]
+               [term::KEY_F8, term::KEY_DELETE]
                   ?st.cart > 0 || ?st.entries > 0 |
                      st.prompt_mode = vade::PROMPT_DELETE
                      vade::draw(t, st)
@@ -469,19 +709,26 @@ run = !=>
                   vade::draw(t, st)
 
                [term::KEY_ESC]
-                  st.full_preview
+                  st.filter_str != ""
                      |
-                        st.full_preview = <->
+                        st.filter_str = ""
+                        st.status_msg = "Filter cleared"
+                        vade::reload_dir(st)
                         vade::draw(t, st)
                      |
-                        st.op_mode != vade::OP_NONE
+                        st.full_preview
                            |
-                              st.op_mode = vade::OP_NONE
-                              st.status_msg = "Operation cancelled."
+                              st.full_preview = <->
                               vade::draw(t, st)
                            |
-                              st.prompt_mode = vade::PROMPT_ESC
-                              vade::draw(t, st)
+                              st.op_mode != vade::OP_NONE
+                                 |
+                                    st.op_mode = vade::OP_NONE
+                                    st.status_msg = "Operation cancelled."
+                                    vade::draw(t, st)
+                                 |
+                                    st.prompt_mode = vade::PROMPT_ESC
+                                    vade::draw(t, st)
 
          [term::EV_MOUSE]
             ev.mouse_act

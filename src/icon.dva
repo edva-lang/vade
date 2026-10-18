@@ -57,6 +57,7 @@
          [".nim"] Icon(('', pal.yellow))
          [".odin"] Icon(('󰟢', pal.blue))
          [".ex", ".exs"] Icon(('', pal.purple))
+         [".hs", ".lhs", ".cabal"] Icon(('', pal.purple))
 
          // Documentation & web
          [".md", ".markdown"] Icon(('', pal.purple))
@@ -103,6 +104,7 @@
          ["Makefile", "makefile", "CMakeLists.txt"] Icon(('', pal.orange))
          ["package.json", "Cargo.toml", "go.mod"] Icon(('󰅩', pal.orange))
          ["edva.ccl", "edva.lock.ccl"] Icon(('', pal.orange))
+         ["stack.yaml", "cabal.project"] Icon(('', pal.purple))
          ["Dockerfile", "Containerfile", "docker-compose.yml"] Icon(('󰡨', pal.cyan))
          |
             ext = file_ext(name)

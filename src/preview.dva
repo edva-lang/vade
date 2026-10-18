@@ -3,6 +3,11 @@
 #use ascii
 #use "fs"
 
+#foreign "c"
+   popen: (cmd: String, mode: String) => Addr
+   pclose: (stream: Addr) => Int
+   fread: (buf: Addr, size: Int, nmemb: Int, stream: Addr) => Int
+
 #public
    #type Line (
       text: String,
@@ -111,9 +116,7 @@
       lines = (String){}
       entries = fs::list_dir_simple(path)
       total = ?entries
-      lines += "Directory containing " + str::from_int(total) + " items:"
-      lines += ""
-      shown = %min(total, max_lines - 2)
+      shown = %min(total, max_lines)
       shown @ i =>
          ent = entries(i)!!
          prefix = i == (total - 1) | "  └── " | "  ├── "
@@ -123,9 +126,69 @@
          lines += "  ... (" + str::from_int(total - shown) + " more items)"
       lines
 
+   is_archive_path: String => <>
+   is_archive_path = path =>
+      len = ?path
+      len < 4 | --| <->
+      ext4 = path(-4..)
+      ext4 [".zip", ".tar", ".tgz", ".txz", ".tbz"] --| <+>
+      len < 7 | --| <->
+      ext7 = path(-7..)
+      ext7 [".tar.gz", ".tar.xz"] --| <+>
+      len < 8 | --| <->
+      ext8 = path(-8..)
+      ext8 [".tar.bz2", ".tar.zst"]
+
+   read_archive_preview: String, Int => (String){}
+   read_archive_preview = path, max_lines =>
+      lines = (String){}
+      cmd = path(-4..)
+         [".zip"] "python3 -c \"import zipfile, sys; [print(f.filename) for f in zipfile.ZipFile(sys.argv[1]).filelist]\" \"" + path + "\" 2>/dev/null"
+         | "tar -tf \"" + path + "\" 2>/dev/null"
+
+      fp = popen(cmd, "r")
+      fp == 0 | --| lines
+
+      lines += "Archive Contents:"
+      lines += ""
+
+      buf = {4096}
+      cur = {256}
+      total_items' = 0
+      0.. @ step =>
+         n = fread(&buf, 1, 4096, fp)
+         n !> 0 | -->
+         n @ i =>
+            c = @[&buf + i u8]
+            c == 10u8
+               |
+                  item_name = +cur
+                  cur = {256}
+                  item_name != "" |
+                     total_items' = total_items' + 1
+                     ?lines < max_lines |
+                        lines += "  ├── " + item_name
+               |
+                  c != 13u8 | cur += Int(c)
+
+      pclose(fp)
+      ?cur > 0 |
+         item_name = +cur
+         total_items' = total_items' + 1
+         ?lines < max_lines |
+            lines += "  └── " + item_name
+
+      ?lines > 0 |
+         lines(0) = "Archive containing " + str::from_int(total_items') + " items:"
+      total_items' > (?lines - 2) |
+         lines += "  ... (" + str::from_int(total_items' - (?lines - 2)) + " more items)"
+      lines
+
    // Main entry point for preview content
    get_preview: String, <>, Int => (String){}
    get_preview = path, is_dir, max_lines =>
       is_dir
          | read_dir_preview(path, max_lines)
-         | read_file_preview(path, max_lines)
+         | is_archive_path(path)
+            | read_archive_preview(path, max_lines)
+            | read_file_preview(path, max_lines)
