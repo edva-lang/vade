@@ -145,6 +145,7 @@ run = !=>
                   ev.ch
                      [' ']
                         vade::toggle_cart(st)
+                        vade::move_cursor(st, 1, visible_h)
                         vade::draw(t, st)
                      ['I']
                         vade::toggle_icons(st)
@@ -222,6 +223,11 @@ run = !=>
                   ?st.cart > 0 || ?st.entries > 0 |
                      st.prompt_mode = vade::PROMPT_DELETE
                      vade::draw(t, st)
+
+               [term::KEY_INSERT]
+                  vade::toggle_cart(st)
+                  vade::move_cursor(st, 1, visible_h)
+                  vade::draw(t, st)
 
                [term::KEY_F10] -->
 

@@ -88,7 +88,10 @@
                cur = {256}
                ?lines !< max_lines | -->
             |
-               c != 13u8 | cur += Rune(c)
+               c != 13u8 |
+                  c == 9u8
+                     | cur += "    "
+                     | cur += Int(c)
       ?cur > 0 && ?lines < max_lines | lines += +cur
       lines
 

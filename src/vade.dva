@@ -82,9 +82,10 @@
 
    is_in_cart: State, String => <>
    is_in_cart = st, name =>
+      full_p = fs::join_path(st.path, name)
       found' = <->
       st.cart @ item =>
-         item.name == name |
+         item.path == full_p |
             found' = <+>
             -->
       found'
@@ -93,15 +94,15 @@
    toggle_cart = st =>
       ?st.entries == 0 | --|
       ent = st.entries(st.selected)!!
+      full_p = fs::join_path(st.path, ent.name)
       new_cart = (CartItem){}
       was_in' = <->
       st.cart @ item =>
-         item.name == ent.name && item.path == st.path
+         item.path == full_p
             | was_in' = <+>
             | new_cart += item
 
       !was_in' |
-         full_p = fs::join_path(st.path, ent.name)
          new_cart += CartItem((ent.name, full_p, ent.is_dir, ent.size, ent.fmt_size))
 
       st.cart = new_cart
@@ -271,10 +272,12 @@
    draw_preview: term::Term, State, Int, Int, Int, Int => ()
    draw_preview = tm, st, prev_r, prev_c, prev_h, prev_w =>
       pal = st.pal
-      n_items = ?st.entries
 
+      // Clear the entire preview pane rectangle upfront
+      term::fill_rect(tm, prev_r, prev_c, prev_h, prev_w, ' ', pal.fg, pal.bg, 0)
+
+      n_items = ?st.entries
       n_items == 0 |
-         term::fill_rect(tm, prev_r, prev_c, prev_h, prev_w, ' ', pal.fg, pal.bg, 0)
          term::put_str(tm, prev_r + 1, prev_c + 2, "No files in directory", pal.muted, pal.bg, 0)
          --|
 
@@ -283,6 +286,11 @@
       lines = preview::get_preview(full_path, sel_ent.is_dir, prev_h + st.preview_scroll + 5)
       n_lines = ?lines
 
+      n_lines == 0 |
+         !sel_ent.is_dir |
+            term::put_str(tm, prev_r + 1, prev_c + 2, "(Empty file)", pal.muted, pal.bg, 0)
+         --|
+
       // Syntax highlight if text file
       lang_id = syntax::detect_language(sel_ent.name)
       hl_lines = !sel_ent.is_dir | syntax::highlight_lines(lang_id, lines, pal) | (syntax::HighlightedLine){}
@@ -290,7 +298,6 @@
       prev_h @ row_idx =>
          y = prev_r + row_idx
          line_idx = st.preview_scroll + row_idx
-         term::fill_rect(tm, y, prev_c, 1, prev_w, ' ', pal.fg, pal.bg, 0)
          line_idx < n_lines |
             // If text file, prepend line number and render syntax spans
             !sel_ent.is_dir && n_lines > 0 |
@@ -299,11 +306,11 @@
                term::put_str(tm, y, prev_c + 5, "│ ", pal.border, pal.bg, 0)
                hl = hl_lines(line_idx)!!
                cur_x' = prev_c + 7
-               max_x = prev_c + prev_w - 1
+               max_x = prev_c + prev_w
                hl.spans @ sp =>
                   cur_x' !< max_x | -->
                   avail = max_x - cur_x'
-                  sp_len = ?sp.text
+                  sp_len = ??sp.text
                   sp_len > 0 |
                      attr = sp.attr == token::ATTR_BOLD | term::ATTR_BOLD | 0
                      term::put_str_clipped(tm, y, cur_x', sp.text, avail, sp.fg, pal.bg, attr)
@@ -415,7 +422,7 @@
       keys += "double a-z   Jump to file 27+ in directory"
       keys += "Enter        Open file / Enter directory"
       keys += "Backspace    Navigate up to parent directory"
-      keys += "Space        Toggle item into/out of Cart"
+      keys += "Space / Ins  Select / deselect & advance"
       keys += "Shift-↑/↓    Scroll Preview pane (Alt-J/K)"
       keys += "F1           Toggle this Help dialog"
       keys += "F2           Rename hovered file"
