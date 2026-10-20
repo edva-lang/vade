@@ -1,0 +1,250 @@
+// vade/src/sysinfo.dva — Cross-platform system metrics collector
+
+#use libc
+#use str
+#use sys
+#use net
+
+#foreign "c"
+   clock_gettime: (clk_id: Int, tp: Addr) => Int
+   gethostname: (name: Addr, len: Int) => Int
+   getloadavg: (loadavg: Addr, nelem: Int) => Int
+   uname: (buf: Addr) => Int
+   sysconf: (name: Int) => Int
+
+#public
+
+#type Timespec #packed (
+   sec: i64,
+   nsec: i64
+)
+
+// Trim whitespace and newlines from both ends using choices
+trim: String => String
+trim = s =>
+   len = ?s
+   len [0] "" |
+      start' = 0
+      len @ i =>
+         s(i)
+            [' ', '\t', '\n', '\r'] (start' == i | start' = i + 1)
+            | -->
+      start' !< len | "" |
+         end' = len
+         len @ j =>
+            idx = len - 1 - j
+            s(idx)
+               [' ', '\t', '\n', '\r'] (end' == idx + 1 | end' = idx)
+               | -->
+         s(start'..end')
+
+// Read up to max_bytes of a file into a String with zero raw pointers
+read_file_head: String, Int => String
+read_file_head = path, max_bytes =>
+   fd = libc::open(path, 0)
+   fd [< 0] "" |
+      buf = {max_bytes}
+      n = libc::read(fd, &buf, max_bytes)
+      libc::close(fd)
+      n [< 1] "" |
+         ?buf = n
+         +buf
+
+// Find substring index in text, starting at start_pos (-1 if not found)
+find_pos: String, String, Int => Int
+find_pos = text, needle, start_pos =>
+   tlen = ?text
+   nlen = ?needle
+   nlen [0] start_pos |
+      start_pos + nlen > tlen | -1 |
+         max_i = tlen - nlen
+         found' = -1
+         (max_i - start_pos + 1) @ k =>
+            found' !< 0 | -->
+            i = start_pos + k
+            match' = <+>
+            nlen @ j =>
+               text(i + j) != needle(j) | match' = <->; -->
+            match' | found' = i
+         found'
+
+// Parse integer from text starting at start_pos using section guards
+parse_int_at: String, Int => (Int, Int)
+parse_int_at = text, start_pos =>
+   tlen = ?text
+   i' = start_pos
+   0.. @
+      i' !< tlen | -->
+      text(i')
+         [< '0'] i' = i' + 1
+         [< ':'] -->
+         | i' = i' + 1
+   i' !< tlen | (0, i') |
+      val' = 0
+      0.. @
+         i' !< tlen | -->
+         c = text(i')
+         c
+            [< '0'] -->
+            [< ':']
+               val' = val' * 10 + (Int(c) - 48)
+               i' = i' + 1
+            | -->
+      (val', i')
+
+// Format float to 2 decimal places using integer math & interpolation
+format_2dec: Float => String
+format_2dec = f =>
+   h = Int(f * 100.0)
+   whole = h / 100
+   frac = h % 100
+   frac_str = frac [< 10] ("0" + str::from_int(frac)) | str::from_int(frac)
+   "${whole}.${frac_str}"
+
+// Universal POSIX sysconf memory query (_SC_PHYS_PAGES, _SC_AVPHYS_PAGES, _SC_PAGE_SIZE)
+get_mem_sysconf: () => (Int, String, String)
+get_mem_sysconf = !=>
+   pg_sz = sysconf(30)
+   phys = sysconf(85)
+   avail = sysconf(86)
+   phys [< 1] (0, "0G", "0G") |
+      tot_bytes = phys * pg_sz
+      avail_bytes = avail * pg_sz
+      used_bytes = tot_bytes > avail_bytes | tot_bytes - avail_bytes | 0
+      pct = (used_bytes * 100) / tot_bytes
+      used_tenths = (used_bytes * 10) / (1024 * 1024 * 1024)
+      tot_tenths = (tot_bytes * 10) / (1024 * 1024 * 1024)
+      used_str = "${used_tenths / 10}.${used_tenths % 10}G"
+      tot_str = "${tot_tenths / 10}.${tot_tenths % 10}G"
+      (pct, used_str, tot_str)
+
+// Query memory stats: (pct, used_str, tot_str)
+// Uses standard POSIX sysconf as universal base with MemAvailable refinement when available
+get_mem_info: () => (Int, String, String)
+get_mem_info = !=>
+   txt = read_file_head("/proc/meminfo", 4096)
+   pos_tot = ?txt > 0 | find_pos(txt, "MemTotal:", 0) | -1
+   pos_tot !< 0 |
+      tot_res = parse_int_at(txt, pos_tot + 9)
+      tot_kb = tot_res.0
+      pos_avail = find_pos(txt, "MemAvailable:", 0)
+      avail_res = pos_avail [< 0] (0, 0) | parse_int_at(txt, pos_avail + 13)
+      avail_kb = avail_res.0
+      tot_kb > 0 |
+         used_kb = tot_kb > avail_kb | tot_kb - avail_kb | 0
+         pct = (used_kb * 100) / tot_kb
+         used_tenths = (used_kb * 10) / (1024 * 1024)
+         tot_tenths = (tot_kb * 10) / (1024 * 1024)
+         used_str = "${used_tenths / 10}.${used_tenths % 10}G"
+         tot_str = "${tot_tenths / 10}.${tot_tenths % 10}G"
+         (pct, used_str, tot_str)
+      | get_mem_sysconf!
+   | get_mem_sysconf!
+
+// Query CPU count via sysconf(_SC_NPROCESSORS_ONLN = 84)
+get_cpu_cores: () => Int
+get_cpu_cores = !=>
+   c = sysconf(84)
+   c [> 0] c | 1
+
+get_cpu_fallback: () => String
+get_cpu_fallback = !=>
+   u = get_uname_info!
+   cores = get_cpu_cores!
+   "${u.2} (${cores} CPUs)"
+
+// Query CPU model with uname fallback
+get_cpu_model: () => String
+get_cpu_model = !=>
+   txt = read_file_head("/proc/cpuinfo", 4096)
+   p = ?txt > 0 | find_pos(txt, "model name", 0) | -1
+   p !< 0 |
+      col = find_pos(txt, ":", p)
+      col !< 0 |
+         nl = find_pos(txt, "\n", col)
+         raw = nl [< 0] txt(col + 1..) | txt(col + 1..nl)
+         trim(raw)
+      | get_cpu_fallback!
+   | get_cpu_fallback!
+
+// Query 1m, 5m, 15m load average via POSIX getloadavg: (load_str, is_high, cores)
+get_loadavg_info: () => (String, <>, Int)
+get_loadavg_info = !=>
+   cores = get_cpu_cores!
+   buf = (0.0, 0.0, 0.0)
+   n = getloadavg(&buf, 3)
+   n [< 1] ("0.00  0.00  0.00", <->, cores) |
+      l0 = format_2dec(buf.0)
+      l1 = format_2dec(buf.1)
+      l2 = format_2dec(buf.2)
+      load_str = "${l0}  ${l1}  ${l2}"
+      is_high = buf.0 > Float(cores)
+      (load_str, is_high, cores)
+
+// Network delegates directly to std/net (zero raw pointers)
+get_network_info: () => (String, String)
+get_network_info = !=>
+   net::get_route_info!
+
+get_local_ip: () => String
+get_local_ip = !=>
+   net::local_ip!
+
+get_default_iface: () => String
+get_default_iface = !=>
+   net::default_interface!
+
+// Query hostname portably via POSIX gethostname
+get_hostname: () => String
+get_hostname = !=>
+   buf = {256}
+   rc = gethostname(&buf, 256)
+   rc [< 0] "localhost" |
+      h = sys::c_str(&buf)
+      ?h [0] "localhost" | h
+
+// Query system uname info portably: (sysname, release, machine)
+get_uname_info: () => (String, String, String)
+get_uname_info = !=>
+   buf = {2048}
+   rc = uname(&buf)
+   rc [< 0] ("Unix", "", "") |
+      sysname = sys::c_str(&buf)
+      nodename = sys::c_str(&buf + 65)
+      release = sys::c_str(&buf + 130)
+      machine = sys::c_str(&buf + 260)
+      (sysname, release, machine)
+
+// Query uptime portably via POSIX clock_gettime (CLOCK_BOOTTIME / CLOCK_MONOTONIC)
+get_uptime_str: () => String
+get_uptime_str = !=>
+   ts = Timespec((0i64, 0i64))
+   rc = clock_gettime(7, &ts)
+   uptime_secs = rc [0] Int(ts.sec) | (clock_gettime(1, &ts) == 0 | Int(ts.sec) | 0)
+   days = uptime_secs / 86400
+   hours = (uptime_secs % 86400) / 3600
+   mins = (uptime_secs % 3600) / 60
+   days
+      [0] "${hours}h ${mins}m"
+      | "${days}d ${hours}h ${mins}m"
+
+// Query OS name and kernel without hardcoding Linux
+get_os_kernel_str: () => String
+get_os_kernel_str = !=>
+   u = get_uname_info!
+   u.0
+      ["Linux"]
+         os_txt = read_file_head("/etc/os-release", 4096)
+         pos = find_pos(os_txt, "PRETTY_NAME=", 0)
+         os_name' = pos [< 0] ++u.0 |
+            start = pos + 12
+            start < ?os_txt && os_txt(start) == '"' | start = start + 1
+            nl = find_pos(os_txt, "\n", start)
+            end = nl [< 0] ?os_txt | nl
+            end > start && os_txt(end - 1) == '"' | end = end - 1
+            os_txt(start..end)
+         ?u.1 [0] os_name' | "${os_name'}  •  Linux ${u.1}"
+      ["Darwin"]
+         "macOS  •  Darwin ${u.1}"
+      |
+         ?u.1 [0] u.0 | "${u.0} ${u.1}"

@@ -59,31 +59,46 @@ The UI uses a single pane maximizing screen utilization, framed by a top path/he
 - Matching entries are dynamically reassigned `a`–`z` fast-access letters for immediate jumping.
 - Press **`Esc`** or **`Enter`** to exit filter mode; `Esc` clears the filter and returns to the full directory listing.
 
+### History Navigation & Pinned Slots (`1`–`5`, `Ctrl-1`–`Ctrl-5`)
+- Press **`1`–`5`** to instantly navigate to any of the 5 visited directory history slots in the bottom-left pane.
+- Press **`Ctrl-1`–`Ctrl-5`** to toggle locking (pinning) the respective slot in place. If the requested slot is empty, a warning is displayed and no action is taken.
+- **Excluded from Rotation**: Pinned directories are rendered with a distinct reddish highlight, and are never overwritten or expelled when browsing new directories; only unlocked slots rotate.
+
 ---
 
 ## 4. Selection & File Operations
 
-### Modal Multi-Selection & Tagging
-- **`Space`**: Toggle selection mark on the current entry.
-- **`V`**: Enter visual selection mode (arrow keys or fast-access letters expand/shrink selection block).
-- **`Ctrl-A`**: Select / deselect all visible entries.
-- Selected items are highlighted and show an indicator (e.g. `*` or checkmark).
+### Global Cross-Directory Selection Accumulator
+- Selection persists seamlessly across directory transitions: items selected in one folder remain staged when navigating to other folders.
+- **`Space` / `Insert`**: Toggle selection mark on the current entry and advance cursor.
+- **`A`**: Select all entries in the active directory view.
+- **`C`**: Clear entire selection cart across all directories.
+- Staged cart items appear in the bottom-left pane with total item count and formatted aggregate size.
+
+### Conflict Resolution Policies
+When pasting items (`P`, `F5`, `F6`) into a destination directory where files of the same name already exist, `vade` prompts for conflict resolution:
+`Conflict: <filename> exists. [O]verwrite [N]ewer [S]kip [A]uto-rename [C]ancel:`
+- **`[O]verwrite`**: Overwrite existing destination file with the source file.
+- **`[N]ewer`**: Overwrite only if the source file has a strictly newer modification time (`mtime`).
+- **`[S]kip`**: Do not copy/move this item; proceed with remaining items in the queue.
+- **`[A]uto-rename`**: Preserve both files by saving the new item with an enumerated suffix (e.g., `file (1).txt`).
+- **`[C]ancel` / `Esc`**: Abort the entire remaining transfer operation safely.
 
 ### File Manipulation Keybindings
 All action keys use uppercase letters or special keys:
-- **`Y` (Yank / Copy)**: Copy selected items (or hovered item) to the internal clipboard.
-- **`X` (Cut / Move)**: Cut selected items to clipboard.
-- **`P` (Paste)**: Paste clipboard items into the active directory.
-- **`D` (Delete)**: Delete / move to trash (shows confirmation dialog with count and size).
-- **`R` (Rename)**: Prompt to rename current file, or batch rename if multiple items are selected.
-- **`N` (New)**: Create new file or directory (names ending in `/` create directories).
-- **`O` (Open With)**: Open file with configured external app or prompt for command.
-- **`Ctrl-R`**: Force refresh directory contents.
+- **`Y` (Yank / Copy)**: Stage selected items (or hovered item if selection is empty) for copy.
+- **`X` (Cut / Move)**: Stage selected items (or hovered item if selection is empty) for move.
+- **`P` (Paste)**: Paste staged items into the active directory with conflict collision checking.
+- **`D` / `F8`**: Delete selected items (or hovered item) permanently with confirmation dialog.
+- **`F2` / `R`**: Prompt to rename hovered entry.
+- **`F7` / `N`**: Create new file or directory (names ending in `/` create directories).
+- **`!`**: Open shell command prompt (interactive command with file path interpolation).
+- **`Ctrl-H` / `F1`**: Toggle help modal keybindings overlay.
 
-### Background Task Queue
-- File copying, moving, and recursive deletion run non-blockingly via `io_uring` or asynchronous worker chunks.
-- Bottom status bar displays live progress: active task description, transfer speed, progress bar percentage, and queued task count.
-- UI navigation remains 100% fluid with zero lag even while transferring gigabytes of data.
+### CLI Integration: Cd-on-Exit & File Picker Mode
+- **`-c, --cwd-file <path>`**: On exit (via `Q`, `:q`, `F10`), write the last visited working directory to `<path>`. Shell wrapper functions (e.g. `yy` or `v`) can automatically `cd` the calling shell to this path.
+- **`-p, --picker-file <path>`**: File picker mode. Pressing `Enter` on a regular file (or selecting multiple items and pressing `Enter`/quitting) writes the selected absolute paths separated by newlines to `<path>` and exits immediately.
+- **Startup Hint**: Upon startup, displays `"Ctrl-H for shortcuts"` in the status bar, automatically dismissed upon the first keypress.
 
 ---
 

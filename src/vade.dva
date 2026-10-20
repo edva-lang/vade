@@ -9,6 +9,7 @@
 #use "fs"
 #use "icon"
 #use "preview"
+#use "sysinfo"
 
 #public
    PROMPT_NONE   = 0
@@ -21,6 +22,7 @@
    PROMPT_SHELL  = 7
    PROMPT_CHDIR  = 8
    PROMPT_FILTER = 9
+   PROMPT_CONFLICT = 10
 
    SORT_NAME  = 0
    SORT_SIZE  = 1
@@ -100,10 +102,15 @@
       status_msg: String,
       history: (String){},
       history_slot: Int,
+      history_locks: Int,
       prev_path: String,
       sort_mode: Int,
       sort_rev: <>,
-      show_hidden: <>
+      show_hidden: <>,
+      startup_hint: <>,
+      conflict_idx: Int,
+      conflict_src: String,
+      conflict_dst: String
    )
 
    new_state: String => State
@@ -128,13 +135,18 @@
          "",
          0,
          "",
-         "",
+         "Ctrl-H for shortcuts",
          hist,
+         0,
          0,
          "",
          SORT_NAME,
          <->,
-         <->
+         <->,
+         <+>,
+         -1,
+         "",
+         ""
       ))
 
    push_history: State, String => ()
@@ -149,14 +161,26 @@
             -->
       found' | --|
 
-      ?st.history < 5
+      // Find an unlocked slot to rotate into, or append if < 5
+      can_append = ?st.history < 5 && (st.history_locks .&. (1 .<. ?st.history)) == 0
+      can_append
          |
             st.history += dir
             st.history_slot = (?st.history == 5 | 0 | ?st.history)
          |
-            slot = st.history_slot
-            st.history(slot) = dir
-            st.history_slot = (slot + 1) % 5
+            cand_slot' = -1
+            5 @ step =>
+               s = (st.history_slot + step) % 5
+               s < ?st.history && (st.history_locks .&. (1 .<. s)) == 0 && cand_slot' < 0 |
+                  cand_slot' = s
+            cand_slot' !< 0
+               |
+                  st.history(cand_slot') = dir
+                  st.history_slot = (cand_slot' + 1) % 5
+               |
+                  ?st.history < 5 |
+                     st.history += dir
+                     st.history_slot = (?st.history == 5 | 0 | ?st.history)
 
    set_dir: State, String => ()
    set_dir = st, new_p =>
@@ -195,6 +219,21 @@
          target = st.history(slot)!!
          set_dir(st, target)
          st.status_msg = "Jumped to " + str::from_int(slot + 1) + ": " + target
+
+   toggle_history_lock: State, Int => ()
+   toggle_history_lock = st, slot =>
+      slot !< 0 && slot < 5 |
+         slot < ?st.history
+            |
+               mask = 1 .<. slot
+               was_locked = (st.history_locks .&. mask) != 0
+               st.history_locks = (was_locked | (st.history_locks - mask) | (st.history_locks + mask))
+               dir_name = abbrev_path(st.history(slot)!!)
+               st.status_msg = (was_locked
+                  | "Unlocked slot " + str::from_int(slot + 1) + ": " + dir_name
+                  | "Locked slot " + str::from_int(slot + 1) + ": " + dir_name + " (pinned)")
+            |
+               st.status_msg = "Warning: history slot " + str::from_int(slot + 1) + " is empty"
 
    abbrev_path: String => String
    abbrev_path = p =>
@@ -387,6 +426,107 @@
             new_cart += CartItem((ent.name, full_p, ent.is_dir, ent.size, ent.fmt_size))
       st.cart = new_cart
       st.status_msg = "Inverted selection"
+
+
+   execute_paste_item: State, Int, String, <> => ()
+   execute_paste_item = st, idx, target_dst, overwrite =>
+      it = st.cart(idx)!!
+      st.op_mode == OP_COPY
+         | fs::copy_file(it.path, target_dst)
+         | fs::rename_path(it.path, target_dst)
+
+   check_next_conflict: State => <>
+   check_next_conflict = st =>
+      st.op_mode == OP_NONE |->
+      n_cart = ?st.cart
+      start_i = st.conflict_idx + 1
+      found_conflict' = <->
+      start_i..n_cart @ i =>
+         it = st.cart(i)!!
+         dst = fs::join_path(st.path, it.name)
+         fs::path_exists(dst) && !found_conflict' |
+            st.conflict_idx = i
+            st.conflict_src = it.path
+            st.conflict_dst = dst
+            found_conflict' = <+>
+            -->
+      found_conflict' |
+         st.prompt_mode = PROMPT_CONFLICT
+         --| <+>
+      --| <->
+
+   start_paste_op: State => ()
+   start_paste_op = st =>
+      ?st.cart == 0 |
+         st.status_msg = "Clipboard / selection is empty."
+         --|
+      st.conflict_idx = -1
+      st.conflict_src = ""
+      st.conflict_dst = ""
+      has_conf = check_next_conflict(st)
+      has_conf |
+         st.conflict_idx > 0 |
+            0..st.conflict_idx @ k =>
+               kit = st.cart(k)!!
+               kdst = fs::join_path(st.path, kit.name)
+               execute_paste_item(st, k, kdst, <+>)
+         --|
+
+      n_cart = ?st.cart
+      n_cart @ i =>
+         it = st.cart(i)!!
+         dst = fs::join_path(st.path, it.name)
+         execute_paste_item(st, i, dst, <+>)
+
+      action_str = st.op_mode == OP_COPY | "Copied " | "Moved "
+      st.status_msg = action_str + str::from_int(n_cart) + " item(s) into " + st.path
+      st.cart = (CartItem){}
+      st.op_mode = OP_NONE
+      reload_dir(st)
+
+   resolve_conflict: State, Int => ()
+   resolve_conflict = st, choice =>
+      idx = st.conflict_idx
+      idx < 0 || idx !< ?st.cart |
+         st.prompt_mode = PROMPT_NONE
+         --|
+
+      src = st.conflict_src
+      dst = st.conflict_dst
+
+      choice
+         ['o', 'O']
+            execute_paste_item(st, idx, dst, <+>)
+         ['n', 'N']
+            src_t = fs::path_mtime(src)
+            dst_t = fs::path_mtime(dst)
+            src_t > dst_t | execute_paste_item(st, idx, dst, <+>)
+         ['s', 'S']
+            dummy = 0
+         ['a', 'A']
+            new_dst = fs::auto_rename_path(dst)
+            execute_paste_item(st, idx, new_dst, <->)
+         |
+            st.prompt_mode = PROMPT_NONE
+            st.status_msg = "Paste operation cancelled."
+            reload_dir(st)
+            --|
+
+      has_more = check_next_conflict(st)
+      !has_more |
+         next_idx = idx + 1
+         n_cart = ?st.cart
+         next_idx..n_cart @ j =>
+            rem_it = st.cart(j)!!
+            rem_dst = fs::join_path(st.path, rem_it.name)
+            execute_paste_item(st, j, rem_dst, <+>)
+         action_str = st.op_mode == OP_COPY | "Copied " | "Moved "
+         st.status_msg = action_str + str::from_int(n_cart) + " item(s) into " + st.path
+         st.cart = (CartItem){}
+         st.op_mode = OP_NONE
+         st.prompt_mode = PROMPT_NONE
+         reload_dir(st)
+
 
    move_cursor: State, Int, Int => ()
    move_cursor = st, delta, max_visible =>
@@ -591,7 +731,7 @@
          bl_title = " History & Selection "
          term::put_str_clipped(tm, split_r, 2, bl_title, bl_w, pal.purple, pal.surface, term::ATTR_BOLD)
          lay.has_right |
-            br_title = " Storage & Operations "
+            br_title = st.op_mode != OP_NONE | " Operations " | " System "
             term::put_str_clipped(tm, split_r, split_c + 2, br_title, cols - split_c - 4, pal.green, pal.surface, term::ATTR_BOLD)
 
    // Draw Primary File List (TL or Full Width)
@@ -837,11 +977,12 @@
          y = cart_r + i
          dir = st.history(i)!!
          is_cur = dir == st.path
+         is_locked = (st.history_locks .&. (1 .<. i)) != 0
          shortcut = str::from_int(i + 1) + " "
          disp = abbrev_path(dir)
-         num_fg = is_cur | pal.yellow | pal.cyan
-         path_fg = is_cur | pal.fg | pal.muted
-         attr = is_cur | term::ATTR_BOLD | 0
+         num_fg = is_locked | pal.red | (is_cur | pal.yellow | pal.cyan)
+         path_fg = is_locked | pal.red | (is_cur | pal.fg | pal.muted)
+         attr = (is_cur || is_locked) | term::ATTR_BOLD | 0
          term::put_str(tm, y, cart_c + 1, shortcut, num_fg, pal.bg, term::ATTR_BOLD)
          term::put_str_clipped(tm, y, cart_c + 3, disp, cart_w - 4, path_fg, pal.bg, attr)
 
@@ -856,51 +997,162 @@
          term::fill_rect(tm, sel_y, cart_c, 1, cart_w, ' ', pal.fg, pal.surface, 0)
          term::put_str_clipped(tm, sel_y, cart_c + 1, sel_str, cart_w - 2, pal.yellow, pal.surface, term::ATTR_BOLD)
 
-   // Draw Bottom-Right (BR): Storage & Operations Monitor
+   get_file_kind: fs::Entry, String => String
+   get_file_kind = ent, full_path =>
+      link = fs::read_symlink(full_path)
+      ?link > 0 | --| "Symbolic Link"
+      ent.is_dir | --| "Directory"
+      preview::is_archive_path(ent.name) | --| "Archive"
+      ent.is_exec | --| "Executable Binary"
+      ext = fs::get_ext(ent.name)
+      ext
+         ["dva"] "Edva Source"
+         ["c", "h"] "C Source / Header"
+         ["rs"] "Rust Source"
+         ["py"] "Python Script"
+         ["go"] "Go Source"
+         ["js", "ts", "jsx", "tsx"] "JavaScript / TypeScript"
+         ["sh", "bash", "zsh"] "Shell Script"
+         ["md", "markdown"] "Markdown Document"
+         ["txt", "text"] "Plain Text"
+         ["json", "ccl", "toml", "yaml", "yml", "xml"] "Configuration / Data"
+         ["html", "htm", "css", "scss"] "Web Document"
+         ["png", "jpg", "jpeg", "gif", "svg", "webp", "ico"] "Image"
+         ["mp3", "wav", "flac", "ogg", "m4a"] "Audio"
+         ["mp4", "mkv", "avi", "mov", "webm"] "Video"
+         ["pdf"] "PDF Document"
+         ["o", "so", "a", "dylib"] "Compiled Object / Library"
+         | ext != "" | (ext + " file") | (preview::is_binary_file(full_path) | "Binary Data" | "Text Document")
+
+   // Draw adaptive progress bar with inverse background
+   draw_bar: term::Term, Int, Int, Int, String, Int, String, term::Palette, Int => ()
+   draw_bar = tm, r, c, avail_w, label, pct, detail_str, pal, bar_fg =>
+      avail_w < 6 | --|
+      full_suf = "] ${pct}% (${detail_str})"
+      short_suf = "] ${pct}%"
+
+      pref = "${label}["
+      pref_len = ?pref
+
+      gw_full = avail_w - pref_len - ?full_suf
+      gw_med = avail_w - pref_len - ?short_suf
+
+      suf' = full_suf
+      gw' = gw_full
+
+      gw_full < 4
+         |
+            gw_med !< 3
+               |
+                  suf' = short_suf
+                  gw' = gw_med
+               |
+                  gw' = 0
+
+      gw' > 0
+         |
+            term::put_str(tm, r, c, pref, pal.fg, pal.bg, 0)
+            bar_c = c + pref_len
+            fw = (gw' * pct) / 100
+            pct > 0 && fw == 0 | fw = 1
+            fw > gw' | fw = gw'
+            uw = gw' - fw
+            bar_color = pct
+               [> 90] pal.red
+               [> 75] pal.yellow
+               | bar_fg
+
+            fw > 0 | term::draw_hline(tm, r, bar_c, fw, ' ', bar_color, pal.bg, term::ATTR_REVERSE)
+            uw > 0 | term::draw_hline(tm, r, bar_c + fw, uw, ' ', pal.muted, pal.bg, 0)
+            rem_w = %max(avail_w - pref_len - gw', 0)
+            term::put_str_clipped(tm, r, bar_c + gw', suf', rem_w, pal.fg, pal.bg, 0)
+         |
+            txt = "${label}${pct}% (${detail_str})"
+            term::put_str_clipped(tm, r, c, txt, avail_w, pal.fg, pal.bg, 0)
+
+   // Draw curated system information metrics
+   draw_sysinfo_rows: term::Term, State, Int, Int, Int, Int => ()
+   draw_sysinfo_rows = tm, st, r, c, avail_h, avail_w =>
+      avail_w < 6 | --|
+      pal = st.pal
+
+      // Row 0: Disk
+      avail_h > 0 |
+         fstat = fs::get_fs_stats(st.path)
+         draw_bar(tm, r, c, avail_w, "Disk: ", fstat.2, "${fstat.3}G free", pal, pal.cyan)
+
+      // Row 1: Memory
+      avail_h > 1 |
+         mem = sysinfo::get_mem_info!
+         draw_bar(tm, r + 1, c, avail_w, "Mem:  ", mem.0, "${mem.1} / ${mem.2}", pal, pal.cyan)
+
+      // Row 2: Load average
+      avail_h > 2 |
+         load = sysinfo::get_loadavg_info!
+         term::put_str(tm, r + 2, c, "Load: ", pal.fg, pal.bg, 0)
+         col = load.1 | pal.red | pal.fg
+         txt = "${load.0} (${load.2} CPUs)"
+         term::put_str_clipped(tm, r + 2, c + 6, txt, %max(avail_w - 6, 0), col, pal.bg, 0)
+
+      // Row 3: Network
+      avail_h > 3 |
+         ip = sysinfo::get_local_ip!
+         iface = sysinfo::get_default_iface!
+         host = sysinfo::get_hostname!
+         target = ?iface > 0 | "${ip} (${iface})" | ip
+         net_str = ?host > 0 | "${target}  •  ${host}" | target
+         term::put_str(tm, r + 3, c, "Net:  ", pal.fg, pal.bg, 0)
+         term::put_str_clipped(tm, r + 3, c + 6, net_str, %max(avail_w - 6, 0), pal.cyan, pal.bg, 0)
+
+      // Row 4: Uptime
+      avail_h > 4 |
+         uptime = sysinfo::get_uptime_str!
+         term::put_str(tm, r + 4, c, "Up:   ", pal.fg, pal.bg, 0)
+         term::put_str_clipped(tm, r + 4, c + 6, uptime, %max(avail_w - 6, 0), pal.fg, pal.bg, 0)
+
+      // Row 5: OS & Kernel
+      avail_h > 5 |
+         os_str = sysinfo::get_os_kernel_str!
+         term::put_str(tm, r + 5, c, "OS:   ", pal.fg, pal.bg, 0)
+         term::put_str_clipped(tm, r + 5, c + 6, os_str, %max(avail_w - 6, 0), pal.purple, pal.bg, 0)
+
+      // Row 6: CPU Model
+      avail_h > 6 |
+         cpu = sysinfo::get_cpu_model!
+         term::put_str(tm, r + 6, c, "CPU:  ", pal.fg, pal.bg, 0)
+         term::put_str_clipped(tm, r + 6, c + 6, cpu, %max(avail_w - 6, 0), pal.muted, pal.bg, 0)
+
+   // Draw Bottom-Right (BR): System Monitor & Operations
    draw_monitor: term::Term, State, Int, Int, Int, Int => ()
    draw_monitor = tm, st, mon_r, mon_c, mon_h, mon_w =>
       pal = st.pal
       mon_h @ row_idx =>
          term::fill_rect(tm, mon_r + row_idx, mon_c, 1, mon_w, ' ', pal.fg, pal.bg, 0)
 
-      // Query filesystem capacity
-      fstat = fs::get_fs_stats(st.path)
-      used_gb = fstat.0
-      tot_gb = fstat.1
-      pct = fstat.2
-      free_gb = fstat.3
+      avail_w = mon_w - 2
+      avail_w < 4 | --|
 
-      // Disk capacity header
-      disk_info = "Mount: " + st.path + " [" + str::from_int(used_gb) + " / " + str::from_int(tot_gb) + " GB]"
-      term::put_str_clipped(tm, mon_r, mon_c + 1, disk_info, mon_w - 2, pal.green, pal.bg, term::ATTR_BOLD)
+      st.op_mode != OP_NONE
+         |
+            // --- Mode A: Operations Banner Overlay on Rows 0-1 ---
+            st.op_mode
+               [OP_COPY]
+                  term::put_str_clipped(tm, mon_r, mon_c + 1, "Task: COPY staged (${?st.cart} items)", avail_w, pal.yellow, pal.bg, term::ATTR_BOLD)
+               [OP_MOVE]
+                  term::put_str_clipped(tm, mon_r, mon_c + 1, "Task: MOVE staged (${?st.cart} items)", avail_w, pal.red, pal.bg, term::ATTR_BOLD)
+               | _
 
-      // Capacity bar gauge
-      gauge_w = %max(mon_w - 18, 6)
-      fill_w = (gauge_w * pct) / 100
-      bar = {64}
-      bar += "["
-      gauge_w @ i =>
-         bar += i < fill_w | "=" | " "
-      bar += "] " + str::from_int(pct) + "% (" + str::from_int(free_gb) + " GB free)"
-      cart_h_avail = mon_h
-      cart_h_avail > 1 |
-         term::put_str_clipped(tm, mon_r + 1, mon_c + 1, +bar, mon_w - 2, pal.cyan, pal.bg, 0)
+            mon_h > 1 |
+               key_hint = st.op_mode
+                  [OP_COPY] "Enter/F5"
+                  | "Enter/F6"
+               term::put_str_clipped(tm, mon_r + 1, mon_c + 1, "Navigate to dest & press ${key_hint} (Esc to cancel)", avail_w, pal.muted, pal.bg, 0)
 
-      // Operations / Tasks
-      cart_h_avail > 2 |
-         st.op_mode
-            [OP_COPY]
-               term::put_str_clipped(tm, mon_r + 2, mon_c + 1, "Task: COPY staged (" + str::from_int(?st.cart) + " items)", mon_w - 2, pal.yellow, pal.bg, term::ATTR_BOLD)
-               cart_h_avail > 3 |
-                  term::put_str_clipped(tm, mon_r + 3, mon_c + 1, "Navigate to destination & press Enter/F5", mon_w - 2, pal.muted, pal.bg, 0)
-            [OP_MOVE]
-               term::put_str_clipped(tm, mon_r + 2, mon_c + 1, "Task: MOVE staged (" + str::from_int(?st.cart) + " items)", mon_w - 2, pal.red, pal.bg, term::ATTR_BOLD)
-               cart_h_avail > 3 |
-                  term::put_str_clipped(tm, mon_r + 3, mon_c + 1, "Navigate to destination & press Enter/F6", mon_w - 2, pal.muted, pal.bg, 0)
-            |
-               term::put_str_clipped(tm, mon_r + 2, mon_c + 1, "Status: Idle • 0 background tasks", mon_w - 2, pal.muted, pal.bg, 0)
-               cart_h_avail > 3 |
-                  term::put_str_clipped(tm, mon_r + 3, mon_c + 1, "Transfer Rate: 0.0 MB/s", mon_w - 2, pal.muted, pal.bg, 0)
+            rem_h = mon_h - 2
+            rem_h > 0 | draw_sysinfo_rows(tm, st, mon_r + 2, mon_c + 1, rem_h, avail_w)
+         |
+            // --- Mode B: Full System Information Display ---
+            draw_sysinfo_rows(tm, st, mon_r, mon_c + 1, mon_h, avail_w)
 
    // Draw Centered Modal Help Dialog (F1)
    draw_help_modal: term::Term, State => ()
@@ -922,24 +1174,25 @@
       keys += "a-z          Jump / cycle files with letter shortcut"
       keys += "Enter        Open file / Enter directory"
       keys += "Backspace    Navigate up to parent directory"
-      keys += "Space / Ins  Select / deselect & advance"
+      keys += "Space / Ins  Select / deselect (cross-directory)"
+      keys += "Y / X / P    Yank (Copy) / Cut (Move) / Paste"
+      keys += "A / C        Select all in directory / Clear selection"
       keys += "1..5         Fast cd to history directory"
-      keys += "~            Jump to Home directory"
-      keys += "-            Jump to Previous directory"
+      keys += "Ctrl-1..5    Lock / unlock history directory (pin in place)"
+      keys += "~ / -        Jump to Home / Previous directory"
       keys += ">            Change directory directly (path prompt)"
       keys += "/            Filter files in active view (live search)"
       keys += ";            Sort, view & selection options"
-      keys += "'            Shell command (Ctrl-Enter / Tab pastes file)"
-      keys += "Esc          Prompt cancel / Clear filter / Esc-Esc to quit"
+      keys += "! / 'cmd'    Shell command (Ctrl-Enter / Tab pastes file)"
+      keys += "Esc          Cancel / Clear filter / Esc-Esc to quit"
       keys += ":            Command line (:cd, :q, etc.)"
       keys += "Shift-↑/↓    Scroll Preview pane (Alt-J/K)"
-      keys += "F1           Toggle this Help dialog"
-      keys += "F2           Rename hovered file"
+      keys += "Ctrl-H / F1  Toggle this Help dialog"
+      keys += "F2 / R       Rename hovered file"
       keys += "F3           Toggle Full-Screen Preview"
       keys += "F4           Edit file with $EDITOR"
-      keys += "F5 / F6      Copy / Move staged items"
-      keys += "F7           Create new file / directory"
-      keys += "F8           Delete hovered / staged items"
+      keys += "F7 / N       Create new file / directory"
+      keys += "F8 / D       Delete hovered / staged items"
       keys += "F10 / Q      Quit vade"
 
       keys @ k_str, idx =>
@@ -1067,6 +1320,9 @@
             draw_input_prompt(tm, prompt_y, c, " cd: ", st.input_buf, st.input_cursor, pal.cyan, pal.fg, line_bg)
          [PROMPT_FILTER]
             draw_input_prompt(tm, prompt_y, c, " /", st.input_buf, st.input_cursor, pal.yellow, pal.fg, line_bg)
+         [PROMPT_CONFLICT]
+            c_name = st.conflict_idx < ?st.cart && st.conflict_idx !< 0 | st.cart(st.conflict_idx)!!.name | ""
+            term::put_str(tm, prompt_y, 1, " Conflict: " + c_name + " exists. [O]verwrite [N]ewer [S]kip [A]uto-rename [C]ancel: ", pal.yellow, line_bg, term::ATTR_BOLD)
          |
             st.status_msg != ""
                |

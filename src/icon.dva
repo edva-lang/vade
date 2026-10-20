@@ -20,7 +20,7 @@
             len @ i =>
                idx = len - 1 - i
                name(idx) == '.' && last_dot' < 0 | last_dot' = idx
-            last_dot' < 0 || last_dot' == 0
+            last_dot' !> 0
                | ""
                | name(last_dot'..)
 
@@ -38,7 +38,7 @@
    ext_icon = ext, pal =>
       ext
          // Programming languages
-         [".dva"] Icon(('', pal.green))
+         [".dva"] Icon(('', pal.green))
          [".c", ".h"] Icon(('', pal.blue))
          [".cpp", ".hpp", ".cc", ".cxx"] Icon(('', pal.blue))
          [".rs"] Icon(('', pal.orange))

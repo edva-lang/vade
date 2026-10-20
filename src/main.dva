@@ -1,5 +1,6 @@
 // vade/src/main.dva — Main terminal file manager entry point and interactive event loop
 
+#use sys
 #use io
 #use libc
 #use str
@@ -26,7 +27,7 @@ edit_file: term::Term, vade::State, String => ()
 edit_file = t, st, full_path =>
    term::disable_raw(t)
    term::show_cursor(t)
-   libc::system("COLORTERM=${COLORTERM:-truecolor} ${EDITOR:-nano} \"" + full_path + "\"")
+   libc::system("COLORTERM=\${COLORTERM:-truecolor} \${EDITOR:-nano} \"" + full_path + "\"")
    term::enable_raw(t)
    term::enable_mouse(t)
    term::hide_cursor(t)
@@ -36,12 +37,41 @@ edit_file = t, st, full_path =>
 
 run: () => ()
 run = !=>
+   cwd_file' = ++""
+   picker_file' = ++""
+   start_dir' = ++"."
+
+   i' = 1
+   0.. @
+      i' !< sys::argc | -->
+      arg = sys::argv_string(i')
+      arg == "--cwd-file" || arg == "-c"
+         |
+            i' = i' + 1
+            i' < sys::argc | cwd_file' = sys::argv_string(i')
+      arg == "--picker-file" || arg == "-p"
+         |
+            i' = i' + 1
+            i' < sys::argc | picker_file' = sys::argv_string(i')
+      ?arg > 11 && arg(..11) == "--cwd-file=" | cwd_file' = arg(11..)
+      ?arg > 14 && arg(..14) == "--picker-file=" | picker_file' = arg(14..)
+      arg == "--help" || arg == "-h"
+         |
+            io::out("Usage: vade [options] [directory]\n\nOptions:\n  -c, --cwd-file <file>     Write last working directory to file on exit\n  -p, --picker-file <file>  Pick file, write path to file, and exit\n  -h, --help                Show this help message\n")
+            sys::exit(0)
+      ?arg > 0 && arg(0) != '-' | start_dir' = arg
+      i' = i' + 1
+
+   cwd_file = cwd_file'
+   picker_file = picker_file'
+   start_dir = start_dir'
+
    t = term::init!
    term::enable_raw(t)
    term::enable_mouse(t)
    term::hide_cursor(t)
 
-   st = vade::new_state(".")
+   st = vade::new_state(start_dir)
    vade::draw(t, st)
 
    0.. @
@@ -53,6 +83,11 @@ run = !=>
 
       ev.kind
          [term::EV_KEY]
+            // Dismiss startup hint on first key pressed
+            st.startup_hint |
+               st.startup_hint = <->
+               st.status_msg == "Ctrl-H for shortcuts" | st.status_msg = ""
+
             // --- 1. Modal: Help dialog open ---
             st.show_help |
                ev.code
@@ -61,9 +96,13 @@ run = !=>
                      vade::draw(t, st)
                   [term::KEY_CHAR]
                      ev.ch
-                        ['q', 'Q']
+                        ['q', 'Q', '?']
                            st.show_help = <->
                            vade::draw(t, st)
+                  [term::KEY_CTRL]
+                     (ev.ch == 'h' || ev.ch == 'H' || ev.ch == 8) |
+                        st.show_help = <->
+                        vade::draw(t, st)
                --^
 
             // --- 2. Modal: Prompt active (Rename, Mkdir, Delete) ---
@@ -521,6 +560,27 @@ run = !=>
                                  vade::draw(t, st)
                         |
                            vade::draw(t, st)
+                  [vade::PROMPT_CONFLICT]
+                     ev.code
+                        [term::KEY_CHAR]
+                           ev.ch
+                              ['o', 'O', 'n', 'N', 's', 'S', 'a', 'A']
+                                 vade::resolve_conflict(st, ev.ch)
+                                 vade::draw(t, st)
+                              ['c', 'C']
+                                 st.prompt_mode = vade::PROMPT_NONE
+                                 st.status_msg = "Operation cancelled."
+                                 vade::reload_dir(st)
+                                 vade::draw(t, st)
+                              |
+                                 vade::draw(t, st)
+                        [term::KEY_ESC]
+                           st.prompt_mode = vade::PROMPT_NONE
+                           st.status_msg = "Operation cancelled."
+                           vade::reload_dir(st)
+                           vade::draw(t, st)
+                        |
+                           vade::draw(t, st)
                --^
 
             // --- 3. Normal Navigation & Commands ---
@@ -541,8 +601,36 @@ run = !=>
                      [';']
                         st.prompt_mode = vade::PROMPT_SEMI
                         vade::draw(t, st)
-                     ['\'']
+                     ['!', '\'']
                         vade::set_prompt(st, vade::PROMPT_SHELL, "")
+                        vade::draw(t, st)
+                     ['Y']
+                        ?st.cart == 0 && ?st.entries > 0 |
+                           vade::toggle_cart(st)
+                        st.op_mode = vade::OP_COPY
+                        st.status_msg = "Staged " + str::from_int(?st.cart) + " item(s) for COPY. Press P to paste."
+                        vade::draw(t, st)
+                     ['X']
+                        ?st.cart == 0 && ?st.entries > 0 |
+                           vade::toggle_cart(st)
+                        st.op_mode = vade::OP_MOVE
+                        st.status_msg = "Staged " + str::from_int(?st.cart) + " item(s) for MOVE. Press P to paste."
+                        vade::draw(t, st)
+                     ['P']
+                        vade::start_paste_op(st)
+                        vade::draw(t, st)
+                     ['A']
+                        vade::select_all(st)
+                        vade::draw(t, st)
+                     ['C']
+                        vade::clear_selection(st)
+                        vade::draw(t, st)
+                     ['D']
+                        ?st.entries > 0 || ?st.cart > 0 |
+                           st.prompt_mode = vade::PROMPT_DELETE
+                           vade::draw(t, st)
+                     ['?']
+                        st.show_help = !st.show_help
                         vade::draw(t, st)
                      ['>']
                         vade::set_prompt(st, vade::PROMPT_CHDIR, "")
@@ -557,7 +645,9 @@ run = !=>
                         vade::go_prev_dir(st)
                         vade::draw(t, st)
                      ['1', '2', '3', '4', '5']
-                        vade::jump_history(st, ev.ch - '1')
+                        (ev.mods .&. term::MOD_CTRL) != 0
+                           | vade::toggle_history_lock(st, ev.ch - '1')
+                           | vade::jump_history(st, ev.ch - '1')
                         vade::draw(t, st)
                      [(_ !< 'a' && _ !> 'z')]
                         vade::jump_shortcut(st, ev.ch - 'a', visible_h)
@@ -566,7 +656,10 @@ run = !=>
                [term::KEY_CTRL]
                   ev.ch
                      ['1', '2', '3', '4', '5']
-                        vade::jump_history(st, ev.ch - '1')
+                        vade::toggle_history_lock(st, ev.ch - '1')
+                        vade::draw(t, st)
+                     ['h', 'H', 8]
+                        st.show_help = !st.show_help
                         vade::draw(t, st)
 
                [term::KEY_F1]
@@ -594,37 +687,25 @@ run = !=>
                [term::KEY_F5]
                   st.op_mode == vade::OP_COPY
                      |
-                        st.cart @ it =>
-                           dst_p = fs::join_path(st.path, it.name)
-                           fs::copy_file(it.path, dst_p)
-                        st.status_msg = "Copied " + str::from_int(?st.cart) + " items into " + st.path
-                        st.cart = (vade::CartItem){}
-                        st.op_mode = vade::OP_NONE
-                        vade::reload_dir(st)
+                        vade::start_paste_op(st)
                         vade::draw(t, st)
                      |
                         ?st.cart == 0 && ?st.entries > 0 |
                            vade::toggle_cart(st)
                         st.op_mode = vade::OP_COPY
-                        st.status_msg = "Staged " + str::from_int(?st.cart) + " items for COPY. Navigate to dest & press Enter/F5."
+                        st.status_msg = "Staged " + str::from_int(?st.cart) + " items for COPY. Press P/F5 to paste."
                         vade::draw(t, st)
 
                [term::KEY_F6]
                   st.op_mode == vade::OP_MOVE
                      |
-                        st.cart @ it =>
-                           dst_p = fs::join_path(st.path, it.name)
-                           fs::rename_path(it.path, dst_p)
-                        st.status_msg = "Moved " + str::from_int(?st.cart) + " items into " + st.path
-                        st.cart = (vade::CartItem){}
-                        st.op_mode = vade::OP_NONE
-                        vade::reload_dir(st)
+                        vade::start_paste_op(st)
                         vade::draw(t, st)
                      |
                         ?st.cart == 0 && ?st.entries > 0 |
                            vade::toggle_cart(st)
                         st.op_mode = vade::OP_MOVE
-                        st.status_msg = "Staged " + str::from_int(?st.cart) + " items for MOVE. Navigate to dest & press Enter/F6."
+                        st.status_msg = "Staged " + str::from_int(?st.cart) + " items for MOVE. Press P/F6 to paste."
                         vade::draw(t, st)
 
                [term::KEY_F7]
@@ -686,23 +767,28 @@ run = !=>
                            vade::set_dir(st, fs::join_path(st.path, ent.name))
                            vade::draw(t, st)
                         |
-                           st.op_mode != vade::OP_NONE
+                           picker_file != ""
                               |
-                                 st.op_mode == vade::OP_COPY
+                                 n_c = ?st.cart
+                                 p_out' = ++""
+                                 n_c > 0
                                     |
-                                       st.cart @ it => fs::copy_file(it.path, fs::join_path(st.path, it.name))
-                                       st.status_msg = "Copied " + str::from_int(?st.cart) + " items into " + st.path
+                                       st.cart @ it =>
+                                          p_out' = p_out' + it.path + "\n"
                                     |
-                                       st.cart @ it => fs::rename_path(it.path, fs::join_path(st.path, it.name))
-                                       st.status_msg = "Moved " + str::from_int(?st.cart) + " items into " + st.path
-                                 st.cart = (vade::CartItem){}
-                                 st.op_mode = vade::OP_NONE
-                                 vade::reload_dir(st)
-                                 vade::draw(t, st)
+                                       full_p = fs::join_path(st.path, ent.name)
+                                       p_out' = full_p + "\n"
+                                 fs::write_text_file(picker_file, p_out')
+                                 -->
                               |
-                                 full_p = fs::join_path(st.path, ent.name)
-                                 edit_file(t, st, full_p)
-                                 vade::draw(t, st)
+                                 st.op_mode != vade::OP_NONE
+                                    |
+                                       vade::start_paste_op(st)
+                                       vade::draw(t, st)
+                                    |
+                                       full_p = fs::join_path(st.path, ent.name)
+                                       edit_file(t, st, full_p)
+                                       vade::draw(t, st)
 
                [term::KEY_BACKSPACE, term::KEY_LEFT]
                   vade::set_dir(st, fs::parent_path(st.path))
@@ -766,10 +852,18 @@ run = !=>
          [term::EV_RESIZE]
             vade::draw(t, st)
 
+   cwd_file != "" |
+      fs::write_text_file(cwd_file, st.path + "\n")
+   picker_file != "" && ?st.cart > 0 |
+      p_cart' = ++""
+      st.cart @ it =>
+         p_cart' = p_cart' + it.path + "\n"
+      fs::write_text_file(picker_file, p_cart')
+
    term::disable_mouse(t)
    term::disable_raw(t)
    term::show_cursor(t)
    term::shutdown(t)
-   io::out("vade exited cleanly.\n")
+   io::out $ "vade exited cleanly.\n"
 
 run!
