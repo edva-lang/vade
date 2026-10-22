@@ -32,6 +32,7 @@ edit_file = t, st, full_path =>
    term::enable_mouse(t)
    term::hide_cursor(t)
    term::force_redraw(t)
+   vade::apply_theme(st, term::is_dark(t))
    vade::reload_dir(st)
    vade::draw(t, st)
 
@@ -72,6 +73,7 @@ run = !=>
    term::hide_cursor(t)
 
    st = vade::new_state(start_dir)
+   vade::apply_theme(st, term::is_dark(t))
    vade::draw(t, st)
 
    0.. @
@@ -96,7 +98,7 @@ run = !=>
                      vade::draw(t, st)
                   [term::KEY_CHAR]
                      ev.ch
-                        ['q', 'Q', '?']
+                        ['?']
                            st.show_help = <->
                            vade::draw(t, st)
                   [term::KEY_CTRL]
@@ -270,6 +272,13 @@ run = !=>
                                  cmd == "help" | st.show_help = <+>
                                  cmd == "home" || cmd == "~" | vade::go_home(st)
                                  cmd == "-" | vade::go_prev_dir(st)
+                                 cmd == "theme" | vade::toggle_theme(st)
+                                 cmd == "dark" || cmd == "theme dark" || cmd == "tokyonight" |
+                                    vade::apply_theme(st, <+>)
+                                    st.status_msg = "Theme: Tokyo Night (Dark)"
+                                 cmd == "light" || cmd == "theme light" || cmd == "solarized_light" |
+                                    vade::apply_theme(st, <->)
+                                    st.status_msg = "Theme: Solarized Light"
                                  ?cmd !< 3 && cmd(..3) == "cd " |
                                     target = vade::trim_str(cmd(3..))
                                     dest = vade::resolve_nav_path(st, target)
@@ -353,6 +362,7 @@ run = !=>
                                     term::enable_mouse(t)
                                     term::hide_cursor(t)
                                     term::force_redraw(t)
+                                    vade::apply_theme(st, term::is_dark(t))
                                     vade::reload_dir(st)
                                  vade::draw(t, st)
                         [term::KEY_CHAR]
@@ -591,10 +601,6 @@ run = !=>
                         vade::toggle_cart(st)
                         vade::move_cursor(st, 1, visible_h)
                         vade::draw(t, st)
-                     ['I']
-                        vade::toggle_icons(st)
-                        vade::draw(t, st)
-                     ['Q'] -->
                      [':']
                         vade::set_prompt(st, vade::PROMPT_CMD, "")
                         vade::draw(t, st)
@@ -604,31 +610,6 @@ run = !=>
                      ['!', '\'']
                         vade::set_prompt(st, vade::PROMPT_SHELL, "")
                         vade::draw(t, st)
-                     ['Y']
-                        ?st.cart == 0 && ?st.entries > 0 |
-                           vade::toggle_cart(st)
-                        st.op_mode = vade::OP_COPY
-                        st.status_msg = "Staged " + str::from_int(?st.cart) + " item(s) for COPY. Press P to paste."
-                        vade::draw(t, st)
-                     ['X']
-                        ?st.cart == 0 && ?st.entries > 0 |
-                           vade::toggle_cart(st)
-                        st.op_mode = vade::OP_MOVE
-                        st.status_msg = "Staged " + str::from_int(?st.cart) + " item(s) for MOVE. Press P to paste."
-                        vade::draw(t, st)
-                     ['P']
-                        vade::start_paste_op(st)
-                        vade::draw(t, st)
-                     ['A']
-                        vade::select_all(st)
-                        vade::draw(t, st)
-                     ['C']
-                        vade::clear_selection(st)
-                        vade::draw(t, st)
-                     ['D']
-                        ?st.entries > 0 || ?st.cart > 0 |
-                           st.prompt_mode = vade::PROMPT_DELETE
-                           vade::draw(t, st)
                      ['?']
                         st.show_help = !st.show_help
                         vade::draw(t, st)
@@ -651,6 +632,9 @@ run = !=>
                         vade::draw(t, st)
                      [(_ !< 'a' && _ !> 'z')]
                         vade::jump_shortcut(st, ev.ch - 'a', visible_h)
+                        vade::draw(t, st)
+                     [(_ !< 'A' && _ !> 'Z')]
+                        vade::jump_shortcut(st, ev.ch - 'A', visible_h)
                         vade::draw(t, st)
 
                [term::KEY_CTRL]
@@ -693,7 +677,7 @@ run = !=>
                         ?st.cart == 0 && ?st.entries > 0 |
                            vade::toggle_cart(st)
                         st.op_mode = vade::OP_COPY
-                        st.status_msg = "Staged " + str::from_int(?st.cart) + " items for COPY. Press P/F5 to paste."
+                        st.status_msg = "Staged " + str::from_int(?st.cart) + " items for COPY. Navigate to dest & press Enter/F5."
                         vade::draw(t, st)
 
                [term::KEY_F6]
@@ -705,7 +689,7 @@ run = !=>
                         ?st.cart == 0 && ?st.entries > 0 |
                            vade::toggle_cart(st)
                         st.op_mode = vade::OP_MOVE
-                        st.status_msg = "Staged " + str::from_int(?st.cart) + " items for MOVE. Press P/F6 to paste."
+                        st.status_msg = "Staged " + str::from_int(?st.cart) + " items for MOVE. Navigate to dest & press Enter/F6."
                         vade::draw(t, st)
 
                [term::KEY_F7]
@@ -850,6 +834,10 @@ run = !=>
                         vade::draw(t, st)
 
          [term::EV_RESIZE]
+            vade::draw(t, st)
+
+         [term::EV_THEME]
+            vade::apply_theme(st, term::is_dark(t))
             vade::draw(t, st)
 
    cwd_file != "" |

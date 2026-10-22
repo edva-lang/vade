@@ -149,6 +149,16 @@
          ""
       ))
 
+   apply_theme: State, <> => ()
+   apply_theme = st, is_dark =>
+      st.pal = (is_dark | term::TOKYONIGHT | term::SOLARIZED_LIGHT)
+
+   toggle_theme: State => ()
+   toggle_theme = st =>
+      is_light = st.pal.bg == term::SOLARIZED_LIGHT.bg
+      st.pal = (is_light | term::TOKYONIGHT | term::SOLARIZED_LIGHT)
+      st.status_msg = (is_light | "Theme: Tokyo Night (Dark)" | "Theme: Solarized Light")
+
    push_history: State, String => ()
    push_history = st, dir =>
       dir == "" | --|
@@ -1161,7 +1171,7 @@
       c = tm.cols
       pal = st.pal
 
-      h = 25
+      h = 24
       w = 64
       top = %max((r - h) / 2, 1)
       left = %max((c - w) / 2, 2)
@@ -1175,8 +1185,6 @@
       keys += "Enter        Open file / Enter directory"
       keys += "Backspace    Navigate up to parent directory"
       keys += "Space / Ins  Select / deselect (cross-directory)"
-      keys += "Y / X / P    Yank (Copy) / Cut (Move) / Paste"
-      keys += "A / C        Select all in directory / Clear selection"
       keys += "1..5         Fast cd to history directory"
       keys += "Ctrl-1..5    Lock / unlock history directory (pin in place)"
       keys += "~ / -        Jump to Home / Previous directory"
@@ -1186,14 +1194,15 @@
       keys += "! / 'cmd'    Shell command (Ctrl-Enter / Tab pastes file)"
       keys += "Esc          Cancel / Clear filter / Esc-Esc to quit"
       keys += ":            Command line (:cd, :q, etc.)"
-      keys += "Shift-↑/↓    Scroll Preview pane (Alt-J/K)"
+      keys += "Shift-↑/↓    Scroll Preview pane"
       keys += "Ctrl-H / F1  Toggle this Help dialog"
-      keys += "F2 / R       Rename hovered file"
+      keys += "F2           Rename hovered file"
       keys += "F3           Toggle Full-Screen Preview"
       keys += "F4           Edit file with $EDITOR"
-      keys += "F7 / N       Create new file / directory"
-      keys += "F8 / D       Delete hovered / staged items"
-      keys += "F10 / Q      Quit vade"
+      keys += "F5 / F6      Copy / Move staged items"
+      keys += "F7           Create new file / directory"
+      keys += "F8 / Del     Delete hovered / staged items"
+      keys += "F10          Quit vade"
 
       keys @ k_str, idx =>
          term::put_str(tm, top + 1 + idx, left + 2, k_str, pal.fg, pal.surface, 0)
