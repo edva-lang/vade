@@ -218,7 +218,7 @@ get_uname_info = !=>
 // Query uptime portably via POSIX clock_gettime (CLOCK_BOOTTIME / CLOCK_MONOTONIC)
 get_uptime_str: () => String
 get_uptime_str = !=>
-   ts = Timespec((0i64, 0i64))
+   ts = Timespec(0i64, 0i64)
    rc = clock_gettime(7, &ts)
    uptime_secs = rc [0] Int(ts.sec) | (clock_gettime(1, &ts) == 0 | Int(ts.sec) | 0)
    days = uptime_secs / 86400

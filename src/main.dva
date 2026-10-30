@@ -1,6 +1,7 @@
 // vade/src/main.dva — Main terminal file manager entry point and interactive event loop
 
 #use sys
+#use const
 #use io
 #use libc
 #use str
@@ -122,7 +123,7 @@ run = !=>
                                        st.cart @ item =>
                                           ok = fs::delete_entry(item.path, item.is_dir)
                                           !ok | err_cnt' = err_cnt' + 1
-                                       st.cart = (vade::CartItem){}
+                                       st.cart = vade::CartItem{}
                                        err_cnt' == 0
                                           | st.status_msg = "Deleted " + str::from_int(n_c) + " staged item(s)."
                                           | st.status_msg = "Failed to delete " + str::from_int(err_cnt') + " item(s)."
@@ -735,11 +736,11 @@ run = !=>
                   vade::draw(t, st)
 
                [term::KEY_HOME]
-                  vade::move_cursor(st, -0maxi32, visible_h)
+                  vade::move_cursor(st, -const::max_i32, visible_h)
                   vade::draw(t, st)
 
                [term::KEY_END]
-                  vade::move_cursor(st, 0maxi32, visible_h)
+                  vade::move_cursor(st, const::max_i32, visible_h)
                   vade::draw(t, st)
 
                [term::KEY_ENTER, term::KEY_RIGHT]

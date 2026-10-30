@@ -36,9 +36,9 @@
       bytes_read > 0 && is_binary_buf(&buf, bytes_read)
 
    // Formats a binary buffer as hex dump lines
-   format_hex_lines: Addr, Int, Int => (String){}
+   format_hex_lines: Addr, Int, Int => String{}
    format_hex_lines = buf, len, max_lines =>
-      lines = (String){}
+      lines = String{}
       rows = %min((len + 15) / 16, max_lines)
       rows == 0 | --| lines
       max_off = (rows - 1) * 16
@@ -77,9 +77,9 @@
       lines
 
    // Read preview lines for text or binary file
-   read_file_preview: String, Int => (String){}
+   read_file_preview: String, Int => String{}
    read_file_preview = path, max_lines =>
-      lines = (String){}
+      lines = String{}
       fd = libc::open(path, 0)
       fd < 0 | --| lines
 
@@ -111,9 +111,9 @@
       lines
 
    // Directory preview: mini tree summary
-   read_dir_preview: String, Int => (String){}
+   read_dir_preview: String, Int => String{}
    read_dir_preview = path, max_lines =>
-      lines = (String){}
+      lines = String{}
       entries = fs::list_dir_simple(path)
       total = ?entries
       shown = %min(total, max_lines)
@@ -139,9 +139,9 @@
       ext8 = path(-8..)
       ext8 [".tar.bz2", ".tar.zst"]
 
-   read_archive_preview: String, Int => (String){}
+   read_archive_preview: String, Int => String{}
    read_archive_preview = path, max_lines =>
-      lines = (String){}
+      lines = String{}
       cmd = path(-4..)
          [".zip"] "python3 -c \"import zipfile, sys; [print(f.filename) for f in zipfile.ZipFile(sys.argv[1]).filelist]\" \"" + path + "\" 2>/dev/null"
          | "tar -tf \"" + path + "\" 2>/dev/null"
@@ -185,7 +185,7 @@
       lines
 
    // Main entry point for preview content
-   get_preview: String, <>, Int => (String){}
+   get_preview: String, <>, Int => String{}
    get_preview = path, is_dir, max_lines =>
       is_dir
          | read_dir_preview(path, max_lines)

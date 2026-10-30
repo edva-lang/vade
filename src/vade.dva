@@ -61,7 +61,7 @@
       list_h = has_bottom | %max(split_r - 1, 1) | %max(grid_h - 2, 1)
       list_w = has_right | %max(split_c - 1, 1) | %max(cols - 2, 1)
 
-      Layout((
+      Layout(
          has_right,
          has_bottom,
          has_attrs,
@@ -72,7 +72,7 @@
          list_w,
          bottom_h,
          grid_h
-      ))
+      )
 
    #type CartItem (
       name: String,
@@ -84,10 +84,10 @@
 
    #type State (
       path: String,
-      entries: (fs::Entry){},
+      entries: fs::Entry{},
       selected: Int,
       scroll: Int,
-      cart: (CartItem){},
+      cart: CartItem{},
       show_icons: <>,
       pal: term::Palette,
       last_jump_key: Int,
@@ -100,7 +100,7 @@
       input_cursor: Int,
       filter_str: String,
       status_msg: String,
-      history: (String){},
+      history: String{},
       history_slot: Int,
       history_locks: Int,
       prev_path: String,
@@ -117,13 +117,13 @@
    new_state = dir_path =>
       real_p = fs::resolve_path(dir_path)
       ents = fs::list_dir(real_p, <->, SORT_NAME, <->)
-      hist = (String){}
-      State((
+      hist = String{}
+      State(
          real_p,
          ents,
          0,
          0,
-         (CartItem){},
+         CartItem{},
          <+>,
          term::TOKYONIGHT,
          -1,
@@ -147,7 +147,7 @@
          -1,
          "",
          ""
-      ))
+      )
 
    apply_theme: State, <> => ()
    apply_theme = st, is_dark =>
@@ -272,7 +272,7 @@
       ?st.entries == 0 | --|
       ent = st.entries(st.selected)!!
       full_p = fs::join_path(st.path, ent.name)
-      new_cart = (CartItem){}
+      new_cart = CartItem{}
       was_in' = <->
       st.cart @ item =>
          item.path == full_p
@@ -280,7 +280,7 @@
             | new_cart += item
 
       !was_in' |
-         new_cart += CartItem((ent.name, full_p, ent.is_dir, ent.size, ent.fmt_size))
+         new_cart += CartItem(ent.name, full_p, ent.is_dir, ent.size, ent.fmt_size)
 
       st.cart = new_cart
       st.status_msg = ""
@@ -361,7 +361,7 @@
       all_entries = fs::list_dir(st.path, st.show_hidden, st.sort_mode, st.sort_rev)
       st.filter_str != ""
          |
-            filtered = (fs::Entry){}
+            filtered = fs::Entry{}
             all_entries @ ent =>
                match_substring_ci(ent.name, st.filter_str) |
                   filtered += ent
@@ -412,17 +412,17 @@
       st.entries @ ent =>
          full_p = fs::join_path(st.path, ent.name)
          !is_in_cart(st, ent.name) |
-            st.cart += CartItem((ent.name, full_p, ent.is_dir, ent.size, ent.fmt_size))
+            st.cart += CartItem(ent.name, full_p, ent.is_dir, ent.size, ent.fmt_size)
       st.status_msg = "Selected all " + str::from_int(?st.entries) + " item(s)"
 
    clear_selection: State => ()
    clear_selection = st =>
-      st.cart = (CartItem){}
+      st.cart = CartItem{}
       st.status_msg = "Cleared selection"
 
    invert_selection: State => ()
    invert_selection = st =>
-      new_cart = (CartItem){}
+      new_cart = CartItem{}
       st.cart @ item =>
          cur_dir_item' = <->
          st.entries @ ent =>
@@ -433,7 +433,7 @@
       st.entries @ ent =>
          !is_in_cart(st, ent.name) |
             full_p = fs::join_path(st.path, ent.name)
-            new_cart += CartItem((ent.name, full_p, ent.is_dir, ent.size, ent.fmt_size))
+            new_cart += CartItem(ent.name, full_p, ent.is_dir, ent.size, ent.fmt_size)
       st.cart = new_cart
       st.status_msg = "Inverted selection"
 
@@ -490,7 +490,7 @@
 
       action_str = st.op_mode == OP_COPY | "Copied " | "Moved "
       st.status_msg = action_str + str::from_int(n_cart) + " item(s) into " + st.path
-      st.cart = (CartItem){}
+      st.cart = CartItem{}
       st.op_mode = OP_NONE
       reload_dir(st)
 
@@ -532,7 +532,7 @@
             execute_paste_item(st, j, rem_dst, <+>)
          action_str = st.op_mode == OP_COPY | "Copied " | "Moved "
          st.status_msg = action_str + str::from_int(n_cart) + " item(s) into " + st.path
-         st.cart = (CartItem){}
+         st.cart = CartItem{}
          st.op_mode = OP_NONE
          st.prompt_mode = PROMPT_NONE
          reload_dir(st)
@@ -947,7 +947,7 @@
       // Syntax highlight if text file
       is_text = !sel_ent.is_dir && !is_archive
       lang_id = syntax::detect_language(sel_ent.name)
-      hl_lines = is_text | syntax::highlight_lines(lang_id, lines, pal) | (syntax::HighlightedLine){}
+      hl_lines = is_text | syntax::highlight_lines(lang_id, lines, pal) | syntax::HighlightedLine{}
 
       prev_h @ row_idx =>
          y = prev_r + row_idx
@@ -1180,7 +1180,7 @@
       term::fill_rect(tm, top, left, h, w, ' ', pal.fg, pal.surface, 0)
       term::draw_titled_box(tm, top, left, h, w, term::BORDER_ROUNDED, "vade Keybindings Help", pal.cyan, pal.surface, pal.yellow)
 
-      keys = (String){}
+      keys = String{}
       keys += "a-z          Jump / cycle files with letter shortcut"
       keys += "Enter        Open file / Enter directory"
       keys += "Backspace    Navigate up to parent directory"

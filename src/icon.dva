@@ -28,88 +28,88 @@
    dir_icon: String, term::Palette => Icon
    dir_icon = name, pal =>
       name
-         [".git"] Icon(('', pal.orange))
+         [".git"] Icon('', pal.orange)
          | name(0) == '.'
-            | Icon(('', pal.muted))
-            | Icon(('', pal.blue))
+            | Icon('', pal.muted)
+            | Icon('', pal.blue)
 
    // Match file extension to icon using branch guards
    ext_icon: String, term::Palette => Icon
    ext_icon = ext, pal =>
       ext
          // Programming languages
-         [".dva"] Icon(('', pal.green))
-         [".c", ".h"] Icon(('', pal.blue))
-         [".cpp", ".hpp", ".cc", ".cxx"] Icon(('', pal.blue))
-         [".rs"] Icon(('', pal.orange))
-         [".py", ".pyw", ".pyi"] Icon(('', pal.yellow))
-         [".go"] Icon(('', pal.cyan))
-         [".js", ".mjs", ".cjs"] Icon(('', pal.yellow))
-         [".ts", ".mts", ".cts"] Icon(('', pal.blue))
-         [".jsx", ".tsx"] Icon(('', pal.cyan))
-         [".sh", ".bash", ".zsh", ".fish"] Icon(('', pal.green))
-         [".nu"] Icon(('', pal.green))
-         [".java", ".jar"] Icon(('', pal.red))
-         [".rb"] Icon(('', pal.red))
-         [".php"] Icon(('', pal.purple))
-         [".lua"] Icon(('', pal.blue))
-         [".zig"] Icon(('', pal.orange))
-         [".nim"] Icon(('', pal.yellow))
-         [".odin"] Icon(('󰟢', pal.blue))
-         [".ex", ".exs"] Icon(('', pal.purple))
-         [".hs", ".lhs", ".cabal"] Icon(('', pal.purple))
+         [".dva"] Icon('', pal.green)
+         [".c", ".h"] Icon('', pal.blue)
+         [".cpp", ".hpp", ".cc", ".cxx"] Icon('', pal.blue)
+         [".rs"] Icon('', pal.orange)
+         [".py", ".pyw", ".pyi"] Icon('', pal.yellow)
+         [".go"] Icon('', pal.cyan)
+         [".js", ".mjs", ".cjs"] Icon('', pal.yellow)
+         [".ts", ".mts", ".cts"] Icon('', pal.blue)
+         [".jsx", ".tsx"] Icon('', pal.cyan)
+         [".sh", ".bash", ".zsh", ".fish"] Icon('', pal.green)
+         [".nu"] Icon('', pal.green)
+         [".java", ".jar"] Icon('', pal.red)
+         [".rb"] Icon('', pal.red)
+         [".php"] Icon('', pal.purple)
+         [".lua"] Icon('', pal.blue)
+         [".zig"] Icon('', pal.orange)
+         [".nim"] Icon('', pal.yellow)
+         [".odin"] Icon('󰟢', pal.blue)
+         [".ex", ".exs"] Icon('', pal.purple)
+         [".hs", ".lhs", ".cabal"] Icon('', pal.purple)
 
          // Documentation & web
-         [".md", ".markdown"] Icon(('', pal.purple))
-         [".txt"] Icon(('', pal.fg))
-         [".pdf"] Icon(('', pal.red))
-         [".html", ".htm"] Icon(('', pal.orange))
-         [".css", ".scss", ".sass", ".less"] Icon(('', pal.blue))
-         [".diff", ".patch"] Icon(('', pal.orange))
-         [".log"] Icon(('󰌱', pal.muted))
+         [".md", ".markdown"] Icon('', pal.purple)
+         [".txt"] Icon('', pal.fg)
+         [".pdf"] Icon('', pal.red)
+         [".html", ".htm"] Icon('', pal.orange)
+         [".css", ".scss", ".sass", ".less"] Icon('', pal.blue)
+         [".diff", ".patch"] Icon('', pal.orange)
+         [".log"] Icon('󰌱', pal.muted)
 
          // Config & data
-         [".ini", ".conf", ".cfg"] Icon(('', pal.yellow))
-         [".ccl", ".toml"] Icon(('', pal.orange))
-         [".json"] Icon(('', pal.yellow))
-         [".yaml", ".yml"] Icon(('', pal.purple))
-         [".xml"] Icon(('󰅪', pal.orange))
-         [".csv", ".tsv"] Icon(('󰈙', pal.green))
-         [".sql"] Icon(('', pal.orange))
-         [".env", ".lock"] Icon(('󰌾', pal.yellow))
+         [".ini", ".conf", ".cfg"] Icon('', pal.yellow)
+         [".ccl", ".toml"] Icon('', pal.orange)
+         [".json"] Icon('', pal.yellow)
+         [".yaml", ".yml"] Icon('', pal.purple)
+         [".xml"] Icon('󰅪', pal.orange)
+         [".csv", ".tsv"] Icon('󰈙', pal.green)
+         [".sql"] Icon('', pal.orange)
+         [".env", ".lock"] Icon('󰌾', pal.yellow)
 
          // Archives
-         [".zip", ".tar", ".gz", ".xz", ".bz2", ".7z", ".rar", ".zst", ".tgz"] Icon(('', pal.orange))
+         [".zip", ".tar", ".gz", ".xz", ".bz2", ".7z", ".rar", ".zst", ".tgz"] Icon('', pal.orange)
 
          // Media
-         [".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico"] Icon(('󰋩', pal.purple))
-         [".mp3", ".wav", ".flac", ".ogg", ".m4a"] Icon(('󰎆', pal.cyan))
-         [".mp4", ".mkv", ".avi", ".mov", ".webm"] Icon(('󰿎', pal.purple))
+         [".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico"] Icon('󰋩', pal.purple)
+         [".mp3", ".wav", ".flac", ".ogg", ".m4a"] Icon('󰎆', pal.cyan)
+         [".mp4", ".mkv", ".avi", ".mov", ".webm"] Icon('󰿎', pal.purple)
 
          // Binaries & compiler artifacts
-         [".ll", ".s", ".asm"] Icon(('', pal.orange))
-         [".o", ".so", ".a", ".dylib"] Icon(('', pal.muted))
-         [".bin", ".exe"] Icon(('', pal.green))
+         [".ll", ".s", ".asm"] Icon('', pal.orange)
+         [".o", ".so", ".a", ".dylib"] Icon('', pal.muted)
+         [".bin", ".exe"] Icon('', pal.green)
 
          // Default fallback
-         | Icon(('', pal.fg))
+         | Icon('', pal.fg)
 
    // Match known special filenames or fall back to extension branch
    file_icon: String, <>, term::Palette => Icon
    file_icon = name, is_exec, pal =>
       name
-         [".gitignore", ".gitmodules", ".gitattributes"] Icon(('', pal.orange))
-         ["LICENSE", "COPYING", "LICENSE.md", "LICENSE.txt"] Icon(('󰈔', pal.yellow))
-         ["README.md", "README"] Icon(('', pal.purple))
-         ["Makefile", "makefile", "CMakeLists.txt"] Icon(('', pal.orange))
-         ["package.json", "Cargo.toml", "go.mod"] Icon(('󰅩', pal.orange))
-         ["edva.ccl", "edva.lock.ccl"] Icon(('', pal.orange))
-         ["stack.yaml", "cabal.project"] Icon(('', pal.purple))
-         ["Dockerfile", "Containerfile", "docker-compose.yml"] Icon(('󰡨', pal.cyan))
+         [".gitignore", ".gitmodules", ".gitattributes"] Icon('', pal.orange)
+         ["LICENSE", "COPYING", "LICENSE.md", "LICENSE.txt"] Icon('󰈔', pal.yellow)
+         ["README.md", "README"] Icon('', pal.purple)
+         ["Makefile", "makefile", "CMakeLists.txt"] Icon('', pal.orange)
+         ["package.json", "Cargo.toml", "go.mod"] Icon('󰅩', pal.orange)
+         ["edva.ccl", "edva.lock.ccl"] Icon('', pal.orange)
+         ["stack.yaml", "cabal.project"] Icon('', pal.purple)
+         ["Dockerfile", "Containerfile", "docker-compose.yml"] Icon('󰡨', pal.cyan)
          |
             ext = file_ext(name)
             is_exec && ext == ""
-               | Icon(('', pal.green))
+               | Icon('', pal.green)
                | ext_icon(ext, pal)
 
    // Primary icon lookup entry point
