@@ -1,6 +1,7 @@
 // vade/src/vade.dva — Core TUI state, 4-pane cross layout, and component renderers
 
 #use libc
+#use path
 #use str
 #use ascii
 #use @term
@@ -286,13 +287,12 @@
       st.status_msg = ""
 
    sort_name: Int => String
-   sort_name = mode =>
-      mode
-         [SORT_NAME] "name"
-         [SORT_SIZE] "size"
-         [SORT_MTIME] "time"
-         [SORT_EXT] "ext"
-         | "name"
+   sort_name =
+      [SORT_NAME] "name"
+      [SORT_SIZE] "size"
+      [SORT_MTIME] "time"
+      [SORT_EXT] "ext"
+      | "name"
 
    trim_str: String => String
    trim_str = s =>
@@ -643,12 +643,9 @@
       p = trim_str(input_p)
       p == "" || p == "~" | --| fs::get_home!
       p == "-" | --| (st.prev_path != "" | st.prev_path | st.path)
-      ?p !< 2 && p(..2) == "~/" |
-         home = fs::get_home!
-         --| fs::resolve_path(fs::join_path(home, p(2..)))
-      p(0) == '/' |
-         --| fs::resolve_path(p)
-      fs::resolve_path(fs::join_path(st.path, p))
+      ?p !< 2 && p(..2) == "~/" || path::is_abs(p) |
+         --| fs::resolve(p)
+      fs::resolve(path::join(st.path, p))
 
    // Draw adaptive framing with embedded headers based on layout tiers
    draw_adaptive_frame: term::Term, Layout, State => ()
