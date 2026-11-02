@@ -21,7 +21,7 @@
       found' = <->
       limit @ i =>
          b = @[buf + i u8]
-         (b == 0u8 || (b < 7u8 && b != 0u8)) |
+         b < 7u8 |
             found' = <+>
             -->
       found'
@@ -70,7 +70,7 @@
             idx = off + j
             idx < len |
                ch = @[buf + idx u8]
-               is_print = ch !< 32u8 && ch !> 126u8
+               is_print = ch [32u8...126u8]
                b += is_print | Rune(ch) | '.'
          b += "|"
          lines += +b

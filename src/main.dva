@@ -6,6 +6,7 @@
 #use libc
 #use str
 #use utf
+#use cli
 #use @term
 #use "vade"
 #use "fs"
@@ -39,34 +40,14 @@ edit_file = t, st, full_path =>
 
 run: () => ()
 run = !=>
-   cwd_file' = ++""
-   picker_file' = ++""
-   start_dir' = ++"."
-
-   i' = 1
-   0.. @
-      i' !< sys::argc | -->
-      arg = sys::argv_string(i')
-      arg == "--cwd-file" || arg == "-c"
-         |
-            i' = i' + 1
-            i' < sys::argc | cwd_file' = sys::argv_string(i')
-      arg == "--picker-file" || arg == "-p"
-         |
-            i' = i' + 1
-            i' < sys::argc | picker_file' = sys::argv_string(i')
-      ?arg > 11 && arg(..11) == "--cwd-file=" | cwd_file' = arg(11..)
-      ?arg > 14 && arg(..14) == "--picker-file=" | picker_file' = arg(14..)
-      arg == "--help" || arg == "-h"
-         |
-            io::out("Usage: vade [options] [directory]\n\nOptions:\n  -c, --cwd-file <file>     Write last working directory to file on exit\n  -p, --picker-file <file>  Pick file, write path to file, and exit\n  -h, --help                Show this help message\n")
-            sys::exit(0)
-      ?arg > 0 && arg(0) != '-' | start_dir' = arg
-      i' = i' + 1
-
-   cwd_file = cwd_file'
-   picker_file = picker_file'
-   start_dir = start_dir'
+   opts = cli::Opts(
+      cli::opt("c:cwd-file", "", "Write last working directory to file on exit"),
+      cli::opt("p:picker-file", "", "Pick file, write path to file, and exit")
+   )
+   p = cli::parse(opts, "Terminal file manager in Edva", "0.1.0")
+   cwd_file = cli::str(p, "cwd-file")
+   picker_file = cli::str(p, "picker-file")
+   start_dir = ?p.args > 0 | p.args(0)!! | "."
 
    t = term::init!
    term::enable_raw(t)
@@ -103,7 +84,7 @@ run = !=>
                            st.show_help = <->
                            vade::draw(t, st)
                   [term::KEY_CTRL]
-                     (ev.ch == 'h' || ev.ch == 'H' || ev.ch == 8) |
+                     ev.ch ['h', 'H', 8] |
                         st.show_help = <->
                         vade::draw(t, st)
                --^
@@ -269,15 +250,15 @@ run = !=>
                               |
                                  cmd = vade::trim_str(st.input_buf)
                                  st.prompt_mode = vade::PROMPT_NONE
-                                 cmd == "q" || cmd == "quit" || cmd == "exit" | -->
+                                 cmd ["q", "quit", "exit"] | -->
                                  cmd == "help" | st.show_help = <+>
-                                 cmd == "home" || cmd == "~" | vade::go_home(st)
+                                 cmd ["home", "~"] | vade::go_home(st)
                                  cmd == "-" | vade::go_prev_dir(st)
                                  cmd == "theme" | vade::toggle_theme(st)
-                                 cmd == "dark" || cmd == "theme dark" || cmd == "tokyonight" |
+                                 cmd ["dark", "theme dark", "tokyonight"] |
                                     vade::apply_theme(st, <+>)
                                     st.status_msg = "Theme: Tokyo Night (Dark)"
-                                 cmd == "light" || cmd == "theme light" || cmd == "solarized_light" |
+                                 cmd ["light", "theme light", "solarized_light"] |
                                     vade::apply_theme(st, <->)
                                     st.status_msg = "Theme: Solarized Light"
                                  ?cmd !< 3 && cmd(..3) == "cd " |
@@ -626,21 +607,21 @@ run = !=>
                      ['-']
                         vade::go_prev_dir(st)
                         vade::draw(t, st)
-                     ['1', '2', '3', '4', '5']
+                     ['1'...'5']
                         (ev.mods .&. term::MOD_CTRL) != 0
                            | vade::toggle_history_lock(st, ev.ch - '1')
                            | vade::jump_history(st, ev.ch - '1')
                         vade::draw(t, st)
-                     [(_ !< 'a' && _ !> 'z')]
+                     ['a'...'z']
                         vade::jump_shortcut(st, ev.ch - 'a', visible_h)
                         vade::draw(t, st)
-                     [(_ !< 'A' && _ !> 'Z')]
+                     ['A'...'Z']
                         vade::jump_shortcut(st, ev.ch - 'A', visible_h)
                         vade::draw(t, st)
 
                [term::KEY_CTRL]
                   ev.ch
-                     ['1', '2', '3', '4', '5']
+                     ['1'...'5']
                         vade::toggle_history_lock(st, ev.ch - '1')
                         vade::draw(t, st)
                      ['h', 'H', 8]
@@ -820,7 +801,7 @@ run = !=>
                [term::MOUSE_PRESS]
                   click_y = ev.y - 1
                   click_x = ev.x
-                  (!lay.has_right || click_x < split_c) && click_y !< 1 && click_y !> lay.list_h |
+                  (!lay.has_right || click_x < split_c) && click_y [1...lay.list_h] |
                      row_offset = click_y - 1
                      clicked_idx = st.scroll + row_offset
                      clicked_idx < ?st.entries |
