@@ -15,13 +15,12 @@
    )
 
    // Checks if a byte buffer looks like binary (contains null bytes or control chars)
-   is_binary_buf: Addr, Int => <>
-   is_binary_buf = buf, len =>
-      limit = %min(len, 512)
+   is_binary_buf: Builder => <>
+   is_binary_buf = buf =>
+      limit = %min(?buf, 512)
       found' = <->
       limit @ i =>
-         b = @[buf + i u8]
-         b < 7u8 |
+         buf(i) < 7 |
             found' = <+>
             -->
       found'
@@ -33,11 +32,14 @@
       buf = {512}
       bytes_read = libc::read(fd, &buf, 512)
       libc::close(fd)
-      bytes_read > 0 && is_binary_buf(&buf, bytes_read)
+      bytes_read !> 0 | --| <->
+      ?buf = bytes_read
+      is_binary_buf(buf)
 
    // Formats a binary buffer as hex dump lines
-   format_hex_lines: Addr, Int, Int => String{}
-   format_hex_lines = buf, len, max_lines =>
+   format_hex_lines: Builder, Int => String{}
+   format_hex_lines = buf, max_lines =>
+      len = ?buf
       lines = String{}
       rows = %min((len + 15) / 16, max_lines)
       rows == 0 | --| lines
@@ -56,7 +58,7 @@
             idx = off + i
             idx < len
                |
-                  val = Int(@[buf + idx u8])
+                  val = buf(idx)
                   hi = (val .>. 4) .&. 0x0F
                   lo = val .&. 0x0F
                   b += (ascii::hex_char_lower(hi), ascii::hex_char_lower(lo), ' ')
@@ -69,9 +71,9 @@
          16 @ j =>
             idx = off + j
             idx < len |
-               ch = @[buf + idx u8]
-               is_print = ch [32u8...126u8]
-               b += is_print | Rune(ch) | '.'
+               ch = buf(idx)
+               is_print = ch [32...126]
+               b += is_print | ch | '.'
          b += "|"
          lines += +b
       lines
@@ -88,25 +90,26 @@
       libc::close(fd)
 
       bytes_read !> 0 | --| lines
+      ?buf = bytes_read
 
       // Check if binary
-      is_binary = is_binary_buf(&buf, bytes_read)
-      is_binary | --| format_hex_lines(&buf, bytes_read, max_lines)
+      is_binary = is_binary_buf(buf)
+      is_binary | --| format_hex_lines(buf, max_lines)
 
       // Text file: extract lines up to max_lines
       cur = {256}
       bytes_read @ i =>
-         c = @[&buf + i u8]
-         c == 10u8
+         c = buf(i)
+         c == 10
             |
                lines += +cur
                cur = {256}
                ?lines !< max_lines | -->
             |
-               c != 13u8 |
-                  c == 9u8
+               c != 13 |
+                  c == 9
                      | cur += "    "
-                     | cur += Int(c)
+                     | cur += c
       ?cur > 0 && ?lines < max_lines | lines += +cur
       lines
 
@@ -158,9 +161,10 @@
       0.. @ step =>
          n = fread(&buf, 1, 4096, fp)
          n !> 0 | -->
+         ?buf = n
          n @ i =>
-            c = @[&buf + i u8]
-            c == 10u8
+            c = buf(i)
+            c == 10
                |
                   item_name = +cur
                   cur = {256}
@@ -169,7 +173,7 @@
                      ?lines < max_lines |
                         lines += "  ├── " + item_name
                |
-                  c != 13u8 | cur += Int(c)
+                  c != 13 | cur += c
 
       pclose(fp)
       ?cur > 0 |

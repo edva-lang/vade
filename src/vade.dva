@@ -463,7 +463,7 @@
       found_conflict' |
          st.prompt_mode = PROMPT_CONFLICT
          --| <+>
-      --| <->
+      <->
 
    start_paste_op: State => ()
    start_paste_op = st =>
@@ -844,6 +844,7 @@
       bytes_read !> 0 |
          term::put_str(tm, prev_r + 1, prev_c + 2, "(Empty file)", pal.muted, pal.bg, 0)
          --|
+      ?buf = bytes_read
 
       total_rows = (bytes_read + 15) / 16
       max_off = (total_rows - 1) * 16
@@ -882,7 +883,7 @@
                cur_x' + 2 < max_x |
                   idx < bytes_read
                      |
-                        val = Int(@[&buf + idx u8])
+                        val = buf(idx)
                         hi = (val .>. 4) .&. 0x0F
                         lo = val .&. 0x0F
                         b_fg = hex_byte_fg(pal, val)
@@ -906,11 +907,10 @@
             16 @ j =>
                idx = off + j
                idx < bytes_read && cur_x' < max_x |
-                  ch = @[&buf + idx u8]
-                  is_print = ch [32u8...126u8]
-                  val = Int(ch)
+                  val = buf(idx)
+                  is_print = val [32...126]
                   b_fg = hex_byte_fg(pal, val)
-                  rn = is_print | Int(ch) | '.'
+                  rn = is_print | val | '.'
                   term::set_cell(tm, y, cur_x', rn, b_fg, pal.bg, 0)
                   cur_x' = cur_x' + 1
 
