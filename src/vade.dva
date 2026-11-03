@@ -7,7 +7,7 @@
 #use @term
 #use @syntax
 #use @syntax/token
-#use "fs"
+#use fs
 #use "icon"
 #use "preview"
 #use "sysinfo"
@@ -257,6 +257,7 @@
    toggle_icons: State => ()
    toggle_icons = st =>
       st.show_icons = !st.show_icons
+      st.status_msg = (st.show_icons | "Icons enabled" | "Icons disabled")
 
    is_in_cart: State, String => <>
    is_in_cart = st, name =>
@@ -438,15 +439,45 @@
       st.status_msg = "Inverted selection"
 
 
+   copy_entry: String, String => <>
+   copy_entry = src, dst =>
+      src == dst | --| <+>
+      fs::is_dir(src) && !fs::is_symlink(src)
+         |
+            !fs::is_dir(dst) |
+               ok_mk = fs::create_dir_all(dst)
+               !ok_mk | --| <->
+            ents = fs::read_dir(src)
+            all_ok' = <+>
+            ents @ e =>
+               sub_src = fs::join(src, e.name)
+               sub_dst = fs::join(dst, e.name)
+               ok_sub = copy_entry(sub_src, sub_dst)
+               !ok_sub | all_ok' = <->
+            all_ok'
+         |
+            fs::copy_file(src, dst)
+
+   move_entry: String, String => <>
+   move_entry = src, dst =>
+      src == dst | --| <+>
+      fs::rename_path(src, dst) | --| <+>
+      ok_cp = copy_entry(src, dst)
+      !ok_cp | --| <->
+      fs::remove_all(src)
+
    execute_paste_item: State, Int, String, <> => ()
    execute_paste_item = st, idx, target_dst, overwrite =>
       it = st.cart(idx)!!
+      overwrite && it.path != target_dst && (fs::exists(target_dst) || fs::is_symlink(target_dst)) |
+         fs::is_dir(target_dst) && !it.is_dir |
+            fs::remove_all(target_dst)
       st.op_mode == OP_COPY
-         | fs::copy_file(it.path, target_dst)
-         | fs::rename_path(it.path, target_dst)
+         | copy_entry(it.path, target_dst)
+         | move_entry(it.path, target_dst)
 
-   check_next_conflict: State => <>
-   check_next_conflict = st =>
+   advance_paste_queue: State => <>
+   advance_paste_queue = st =>
       st.op_mode == OP_NONE |->
       n_cart = ?st.cart
       start_i = st.conflict_idx + 1
@@ -454,15 +485,24 @@
       start_i..n_cart @ i =>
          it = st.cart(i)!!
          dst = fs::join_path(st.path, it.name)
-         fs::path_exists(dst) && !found_conflict' |
-            st.conflict_idx = i
-            st.conflict_src = it.path
-            st.conflict_dst = dst
-            found_conflict' = <+>
-            -->
+         (fs::path_exists(dst) || fs::is_symlink(dst)) && !found_conflict'
+            |
+               st.conflict_idx = i
+               st.conflict_src = it.path
+               st.conflict_dst = dst
+               found_conflict' = <+>
+               -->
+            |
+               execute_paste_item(st, i, dst, <+>)
       found_conflict' |
          st.prompt_mode = PROMPT_CONFLICT
          --| <+>
+      action_str = st.op_mode == OP_COPY | "Copied " | "Moved "
+      st.status_msg = action_str + str::from_int(n_cart) + " item(s) into " + st.path
+      st.cart = CartItem{}
+      st.op_mode = OP_NONE
+      st.prompt_mode = PROMPT_NONE
+      reload_dir(st)
       <->
 
    start_paste_op: State => ()
@@ -473,26 +513,7 @@
       st.conflict_idx = -1
       st.conflict_src = ""
       st.conflict_dst = ""
-      has_conf = check_next_conflict(st)
-      has_conf |
-         st.conflict_idx > 0 |
-            0..st.conflict_idx @ k =>
-               kit = st.cart(k)!!
-               kdst = fs::join_path(st.path, kit.name)
-               execute_paste_item(st, k, kdst, <+>)
-         --|
-
-      n_cart = ?st.cart
-      n_cart @ i =>
-         it = st.cart(i)!!
-         dst = fs::join_path(st.path, it.name)
-         execute_paste_item(st, i, dst, <+>)
-
-      action_str = st.op_mode == OP_COPY | "Copied " | "Moved "
-      st.status_msg = action_str + str::from_int(n_cart) + " item(s) into " + st.path
-      st.cart = CartItem{}
-      st.op_mode = OP_NONE
-      reload_dir(st)
+      advance_paste_queue(st)
 
    resolve_conflict: State, Int => ()
    resolve_conflict = st, choice =>
@@ -522,21 +543,7 @@
             reload_dir(st)
             --|
 
-      has_more = check_next_conflict(st)
-      !has_more |
-         next_idx = idx + 1
-         n_cart = ?st.cart
-         next_idx..n_cart @ j =>
-            rem_it = st.cart(j)!!
-            rem_dst = fs::join_path(st.path, rem_it.name)
-            execute_paste_item(st, j, rem_dst, <+>)
-         action_str = st.op_mode == OP_COPY | "Copied " | "Moved "
-         st.status_msg = action_str + str::from_int(n_cart) + " item(s) into " + st.path
-         st.cart = CartItem{}
-         st.op_mode = OP_NONE
-         st.prompt_mode = PROMPT_NONE
-         reload_dir(st)
-
+      advance_paste_queue(st)
 
    move_cursor: State, Int, Int => ()
    move_cursor = st, delta, max_visible =>
@@ -562,7 +569,12 @@
             next_idx = st.selected + 26
             target_idx' = next_idx < n | next_idx | key_idx
          |
-            target_idx' = key_idx
+            vis_end = %min(st.scroll + %max(max_visible, 1), n)
+            vis_match' = -1
+            st.scroll..vis_end @ idx =>
+               (idx % 26) == key_idx && vis_match' < 0 |
+                  vis_match' = idx
+            target_idx' = (vis_match' !< 0 | vis_match' | key_idx)
 
       st.last_jump_key = key_idx
       target_idx' != st.selected |
@@ -798,12 +810,17 @@
                has_attrs | reserved_right' = reserved_right' + perms_col_w + 1
 
                avail_w = %max(list_w - (name_x' - list_c) - reserved_right', 4)
+               full_ent_p = fs::join_path(st.path, ent.name)
+               link_t = fs::read_symlink(full_ent_p)
+               disp_name = ?link_t > 0
+                  | ent.name + (ent.is_dir | "/ -> " | " -> ") + link_t
+                  | (ent.is_dir | ent.name + "/" | ent.name)
                ent.is_dir
                   |
-                     term::put_str_clipped(tm, y, name_x', ent.name + "/", avail_w, pal.blue, row_bg, term::ATTR_BOLD)
+                     term::put_str_clipped(tm, y, name_x', disp_name, avail_w, pal.blue, row_bg, term::ATTR_BOLD)
                   |
-                     file_fg = file_color(ent, pal)
-                     term::put_str_clipped(tm, y, name_x', ent.name, avail_w, file_fg, row_bg, ent.is_exec | term::ATTR_BOLD | 0)
+                     file_fg = ?link_t > 0 | pal.cyan | file_color(ent, pal)
+                     term::put_str_clipped(tm, y, name_x', disp_name, avail_w, file_fg, row_bg, ent.is_exec | term::ATTR_BOLD | 0)
 
                // Right suffixes: [attributes] [size]
                has_attrs && perms_len > 0 |
@@ -1232,6 +1249,10 @@
       x' = put_chunk(tm, y, x', "View: ", max_x, pal.cyan, bg, <+>)
       x' = put_chunk(tm, y, x', "H", max_x, pal.yellow, bg, <+>)
       x' = put_chunk(tm, y, x', "idden ", max_x, pal.fg, bg, <->)
+      x' = put_chunk(tm, y, x', "G", max_x, pal.yellow, bg, <+>)
+      x' = put_chunk(tm, y, x', "lyphs ", max_x, pal.fg, bg, <->)
+      x' = put_chunk(tm, y, x', "T", max_x, pal.yellow, bg, <+>)
+      x' = put_chunk(tm, y, x', "heme ", max_x, pal.fg, bg, <->)
       x' = put_chunk(tm, y, x', "│ ", max_x, pal.border, bg, <->)
       x' = put_chunk(tm, y, x', "Sel: ", max_x, pal.green, bg, <+>)
       x' = put_chunk(tm, y, x', "A", max_x, pal.yellow, bg, <+>)

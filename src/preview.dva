@@ -1,7 +1,7 @@
 #use libc
 #use str
 #use ascii
-#use "fs"
+#use fs
 
 #foreign "c"
    popen: (cmd: String, mode: String) => Addr
@@ -191,8 +191,15 @@
    // Main entry point for preview content
    get_preview: String, <>, Int => String{}
    get_preview = path, is_dir, max_lines =>
-      is_dir
-         | read_dir_preview(path, max_lines)
-         | is_archive_path(path)
-            | read_archive_preview(path, max_lines)
-            | read_file_preview(path, max_lines)
+      fs::is_symlink(path) && !fs::exists(path)
+         |
+            target = fs::read_symlink(path)
+            lines = String{}
+            lines += "Symbolic Link -> " + target + " (broken target)"
+            lines
+         |
+            is_dir
+               | read_dir_preview(path, max_lines)
+               | is_archive_path(path)
+                  | read_archive_preview(path, max_lines)
+                  | read_file_preview(path, max_lines)

@@ -1,0 +1,168 @@
+// vade/tests/test_vade.dva — Automated test suite for Vade 1.0
+
+#use test
+#use fs
+#use str
+#use @term
+#use "../src/vade"
+#use "../src/icon"
+#use "../src/preview"
+#use "../src/sysinfo"
+
+assert: <>, String => ()
+assert = cond, msg =>
+   test::check(cond, msg)
+
+main: () => ()
+main = !=>
+   // --- 1. Adaptive layout tiers across terminal dimensions ------------------
+   lay_tiny = vade::compute_layout(6, 24)
+   assert(!lay_tiny.has_right, "tiny terminal hides right pane")
+   assert(!lay_tiny.has_bottom, "tiny terminal hides bottom pane")
+   assert(!lay_tiny.has_attrs, "tiny terminal hides attributes")
+   assert(!lay_tiny.has_sizes, "tiny terminal hides sizes")
+
+   lay_med = vade::compute_layout(24, 60)
+   assert(lay_med.has_right, "medium terminal enables right pane")
+   assert(lay_med.has_bottom, "medium terminal enables bottom pane")
+   assert(lay_med.has_sizes, "medium terminal enables sizes")
+   assert(!lay_med.has_attrs, "medium terminal hides attributes")
+
+   lay_full = vade::compute_layout(40, 120)
+   assert(lay_full.has_right, "full terminal enables right pane")
+   assert(lay_full.has_bottom, "full terminal enables bottom pane")
+   assert(lay_full.has_sizes, "full terminal enables sizes")
+   assert(lay_full.has_attrs, "full terminal enables attributes")
+   assert(lay_full.list_h > 10, "full terminal list_h > 10")
+   assert(lay_full.bottom_h !< 2, "full terminal bottom_h >= 2")
+
+   // --- 2. Icons, previews, and sysinfo telemetry ----------------------------
+   pal = term::TOKYONIGHT
+   ic_dva = icon::get_icon("main.dva", <->, <->, pal)
+   assert(ic_dva.color == pal.green, ".dva icon uses green")
+   ic_dir = icon::get_icon(".git", <+>, <->, pal)
+   assert(ic_dir.color == pal.orange, ".git folder icon uses orange")
+   ic_exec = icon::get_icon("vade", <->, <+>, pal)
+   assert(ic_exec.color == pal.green, "executable icon uses green")
+
+   tmp_base = "/tmp/vade_test_prev"
+   fs::remove_all(tmp_base)
+   fs::create_dir_all(tmp_base)
+   txt_p = fs::join(tmp_base, "hello.txt")
+   fs::write_file(txt_p, "alpha\nbeta\ngamma\n")
+   lines = preview::get_preview(txt_p, <->, 10)
+   assert(?lines == 3, "text preview has 3 lines")
+   assert(lines(0)!! == "alpha", "text preview line 0")
+   assert(lines(2)!! == "gamma", "text preview line 2")
+
+   dir_lines = preview::get_preview(tmp_base, <+>, 10)
+   assert(?dir_lines !< 1, "dir preview has >= 1 line")
+
+   mem = sysinfo::get_mem_info!
+   assert(mem.0 !< 0 && mem.0 !> 100, "mem usage percentage in 0..100")
+   load = sysinfo::get_loadavg_info!
+   assert(load.2 !< 1, "CPU count >= 1")
+   up = sysinfo::get_uptime_str!
+   assert(?up > 0, "uptime string non-empty")
+   fs::remove_all(tmp_base)
+
+   // --- 3. Navigation, history ring locking, filtering, and letter jump ------
+   root = "/tmp/vade_test_nav"
+   fs::remove_all(root)
+   d1 = fs::join(root, "dir1")
+   d2 = fs::join(root, "dir2")
+   d3 = fs::join(root, "dir3")
+   fs::create_dir_all(d1)
+   fs::create_dir_all(d2)
+   fs::create_dir_all(d3)
+
+   30 @ i =>
+      num = i < 10 | "0" + str::from_int(i) | str::from_int(i)
+      fname = "file_" + num + ".txt"
+      fs::write_file(fs::join(d1, fname), "content " + num)
+
+   st = vade::new_state(d1)
+   assert(?st.entries == 30, "listed 30 entries in d1")
+
+   // Scroll down to index 25 (visible window 16..26 for height 10)
+   vade::move_cursor(st, 25, 10)
+   assert(st.selected == 25, "cursor at 25")
+   assert(st.scroll == 16, "scroll at 16")
+
+   // Jump to letter 'a' (key_idx 0): index 26 is inside visible window [16..26]!
+   vade::jump_shortcut(st, 0, 10)
+   assert(st.selected == 26, "letter jump 'a' selects visible index 26 when scrolled")
+   // Pressing 'a' again cycles +26 -> wraps around to index 0
+   vade::jump_shortcut(st, 0, 10)
+   assert(st.selected == 0, "second letter jump 'a' wraps around to index 0")
+
+   // Live case-insensitive filtering
+   st.filter_str = "FILE_1"
+   vade::reload_dir(st)
+   assert(?st.entries == 10, "case-insensitive filter 'FILE_1' matches 10 files")
+   st.filter_str = ""
+   vade::reload_dir(st)
+   assert(?st.entries == 30, "clearing filter restores 30 files")
+
+   // History ring & slot locking
+   vade::set_dir(st, d2)
+   assert(?st.history == 1, "history recorded d1")
+   assert(st.history(0)!! == fs::resolve_path(d1), "history slot 0 is d1")
+   vade::toggle_history_lock(st, 0)
+   assert((st.history_locks .&. 1) != 0, "slot 0 locked")
+   vade::set_dir(st, d3)
+   vade::jump_history(st, 0)
+   assert(st.path == fs::resolve_path(d1), "jumped back to history slot 0")
+
+   fs::remove_all(root)
+
+   // --- 4. Cart staging, recursive directory copy, and conflict resolution ---
+   ops_root = "/tmp/vade_test_ops"
+   fs::remove_all(ops_root)
+   src_dir = fs::join(ops_root, "src")
+   dst_dir = fs::join(ops_root, "dst")
+   nested = fs::join(src_dir, "pkg/sub")
+   fs::create_dir_all(nested)
+   fs::create_dir_all(dst_dir)
+
+   fs::write_file(fs::join(nested, "mod.dva"), "// mod")
+   fs::write_file(fs::join(src_dir, "a.txt"), "from_src_a")
+   fs::write_file(fs::join(src_dir, "b.txt"), "from_src_b")
+
+   st2 = vade::new_state(src_dir)
+   assert(?st2.entries == 3, "src_dir has 3 entries (pkg/, a.txt, b.txt)")
+
+   // Stage all 3 items (including nested directory pkg/) and COPY into dst_dir
+   vade::select_all(st2)
+   assert(?st2.cart == 3, "staged 3 items into cart")
+   st2.op_mode = vade::OP_COPY
+   vade::set_dir(st2, dst_dir)
+   vade::start_paste_op(st2)
+
+   assert(st2.op_mode == vade::OP_NONE, "paste completed with no conflicts")
+   assert(?st2.cart == 0, "cart emptied after paste")
+   assert(fs::is_file(fs::join(dst_dir, "pkg/sub/mod.dva")), "recursive directory copy succeeded")
+   assert(fs::is_file(fs::join(dst_dir, "a.txt")), "copied a.txt")
+   assert(fs::is_file(fs::join(dst_dir, "b.txt")), "copied b.txt")
+
+   // Stage all again from src_dir to test batch conflict resolution (Skip, Auto-rename, Overwrite)
+   vade::set_dir(st2, src_dir)
+   vade::select_all(st2)
+   st2.op_mode = vade::OP_COPY
+   vade::set_dir(st2, dst_dir)
+   vade::start_paste_op(st2)
+
+   assert(st2.prompt_mode == vade::PROMPT_CONFLICT, "conflict 1 triggered (pkg)")
+   vade::resolve_conflict(st2, 's') // skip pkg
+   assert(st2.prompt_mode == vade::PROMPT_CONFLICT, "conflict 2 triggered (a.txt)")
+   vade::resolve_conflict(st2, 'a') // auto-rename a.txt -> a (1).txt
+   assert(st2.prompt_mode == vade::PROMPT_CONFLICT, "conflict 3 triggered (b.txt)")
+   vade::resolve_conflict(st2, 'o') // overwrite b.txt
+
+   assert(st2.prompt_mode == vade::PROMPT_NONE, "all conflicts resolved")
+   assert(fs::is_file(fs::join(dst_dir, "a (1).txt")), "auto-renamed file 'a (1).txt' created")
+
+   fs::remove_all(ops_root)
+   test::summary!
+
+main!

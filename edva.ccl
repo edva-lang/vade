@@ -1,9 +1,15 @@
 name = vade
-version = 0.1.0
-edva = 1.1.1+9ab5a59
+version = 1.0.0
+edva = 1.4.7
 
 dependencies =
   term =
     path = ../term
   syntax =
     path = ../syntax
+
+targets =
+  vade =
+    src = src/main.dva
+    out = vade
+    opt = -O2

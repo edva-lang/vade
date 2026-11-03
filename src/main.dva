@@ -9,7 +9,7 @@
 #use cli
 #use @term
 #use "vade"
-#use "fs"
+#use fs
 
 trim_str: String => String
 trim_str = s =>
@@ -44,7 +44,7 @@ run = !=>
       cli::opt("c:cwd-file", "", "Write last working directory to file on exit"),
       cli::opt("p:picker-file", "", "Pick file, write path to file, and exit")
    )
-   p = cli::parse(opts, "Terminal file manager in Edva", "0.1.0")
+   p = cli::parse(opts, "Terminal file manager in Edva", "1.0.0")
    cwd_file = cli::str(p, "cwd-file")
    picker_file = cli::str(p, "picker-file")
    start_dir = ?p.args > 0 | p.args(0)!! | "."
@@ -102,7 +102,7 @@ run = !=>
                                     |
                                        err_cnt' = 0
                                        st.cart @ item =>
-                                          ok = fs::delete_entry(item.path, item.is_dir)
+                                          ok = fs::remove_all(item.path)
                                           !ok | err_cnt' = err_cnt' + 1
                                        st.cart = vade::CartItem{}
                                        err_cnt' == 0
@@ -112,7 +112,7 @@ run = !=>
                                        ?st.entries > 0 |
                                           del_ent = st.entries(st.selected)!!
                                           del_path = fs::join_path(st.path, del_ent.name)
-                                          ok = fs::delete_entry(del_path, del_ent.is_dir)
+                                          ok = fs::remove_all(del_path)
                                           ok
                                              | st.status_msg = "Deleted " + del_ent.name
                                              | st.status_msg = "Failed to delete " + del_ent.name
@@ -255,6 +255,15 @@ run = !=>
                                  cmd ["home", "~"] | vade::go_home(st)
                                  cmd == "-" | vade::go_prev_dir(st)
                                  cmd == "theme" | vade::toggle_theme(st)
+                                 cmd ["icons", "glyphs"] | vade::toggle_icons(st)
+                                 cmd == "hidden" | vade::toggle_hidden(st)
+                                 cmd == "clear" | vade::clear_selection(st)
+                                 cmd == "all" | vade::select_all(st)
+                                 cmd ["sort name", "sort n"] | vade::set_sort_mode(st, vade::SORT_NAME)
+                                 cmd ["sort size", "sort s"] | vade::set_sort_mode(st, vade::SORT_SIZE)
+                                 cmd ["sort time", "sort mtime", "sort m"] | vade::set_sort_mode(st, vade::SORT_MTIME)
+                                 cmd ["sort ext", "sort e"] | vade::set_sort_mode(st, vade::SORT_EXT)
+                                 cmd ["sort rev", "rev"] | vade::toggle_sort_rev(st)
                                  cmd ["dark", "theme dark", "tokyonight"] |
                                     vade::apply_theme(st, <+>)
                                     st.status_msg = "Theme: Tokyo Night (Dark)"
@@ -527,7 +536,7 @@ run = !=>
                               ['s', 'S']
                                  vade::set_sort_mode(st, vade::SORT_SIZE)
                                  vade::draw(t, st)
-                              ['m', 'M', 't', 'T']
+                              ['m', 'M']
                                  vade::set_sort_mode(st, vade::SORT_MTIME)
                                  vade::draw(t, st)
                               ['e', 'E']
@@ -538,6 +547,12 @@ run = !=>
                                  vade::draw(t, st)
                               ['h', 'H']
                                  vade::toggle_hidden(st)
+                                 vade::draw(t, st)
+                              ['g', 'G']
+                                 vade::toggle_icons(st)
+                                 vade::draw(t, st)
+                              ['t', 'T']
+                                 vade::toggle_theme(st)
                                  vade::draw(t, st)
                               ['a', 'A']
                                  vade::select_all(st)
@@ -691,7 +706,7 @@ run = !=>
                [term::KEY_F10] -->
 
                [term::KEY_UP]
-                  (ev.mods .&. term::MOD_SHIFT) != 0 || (ev.mods .&. term::MOD_ALT) != 0
+                  st.full_preview || (ev.mods .&. term::MOD_SHIFT) != 0 || (ev.mods .&. term::MOD_ALT) != 0
                      |
                         st.preview_scroll = %max(st.preview_scroll - 1, 0)
                         vade::draw(t, st)
@@ -700,7 +715,7 @@ run = !=>
                         vade::draw(t, st)
 
                [term::KEY_DOWN]
-                  (ev.mods .&. term::MOD_SHIFT) != 0 || (ev.mods .&. term::MOD_ALT) != 0
+                  st.full_preview || (ev.mods .&. term::MOD_SHIFT) != 0 || (ev.mods .&. term::MOD_ALT) != 0
                      |
                         st.preview_scroll = st.preview_scroll + 1
                         vade::draw(t, st)
@@ -709,19 +724,26 @@ run = !=>
                         vade::draw(t, st)
 
                [term::KEY_PAGE_UP]
-                  vade::move_cursor(st, -visible_h, visible_h)
+                  st.full_preview
+                     | st.preview_scroll = %max(st.preview_scroll - visible_h, 0)
+                     | vade::move_cursor(st, -visible_h, visible_h)
                   vade::draw(t, st)
 
                [term::KEY_PAGE_DOWN]
-                  vade::move_cursor(st, visible_h, visible_h)
+                  st.full_preview
+                     | st.preview_scroll = st.preview_scroll + visible_h
+                     | vade::move_cursor(st, visible_h, visible_h)
                   vade::draw(t, st)
 
                [term::KEY_HOME]
-                  vade::move_cursor(st, -const::max_i32, visible_h)
+                  st.full_preview
+                     | st.preview_scroll = 0
+                     | vade::move_cursor(st, -const::max_i32, visible_h)
                   vade::draw(t, st)
 
                [term::KEY_END]
-                  vade::move_cursor(st, const::max_i32, visible_h)
+                  !st.full_preview |
+                     vade::move_cursor(st, const::max_i32, visible_h)
                   vade::draw(t, st)
 
                [term::KEY_ENTER, term::KEY_RIGHT]
@@ -785,14 +807,14 @@ run = !=>
          [term::EV_MOUSE]
             ev.mouse_act
                [term::MOUSE_SCROLL_UP]
-                  ev.x > split_c && lay.has_right
+                  st.full_preview || (ev.x > split_c && lay.has_right)
                      |
                         st.preview_scroll = %max(st.preview_scroll - 2, 0)
                      |
                         vade::move_cursor(st, -2, visible_h)
                   vade::draw(t, st)
                [term::MOUSE_SCROLL_DOWN]
-                  ev.x > split_c && lay.has_right
+                  st.full_preview || (ev.x > split_c && lay.has_right)
                      |
                         st.preview_scroll = st.preview_scroll + 2
                      |
@@ -801,19 +823,26 @@ run = !=>
                [term::MOUSE_PRESS]
                   click_y = ev.y - 1
                   click_x = ev.x
-                  (!lay.has_right || click_x < split_c) && click_y [1...lay.list_h] |
-                     row_offset = click_y - 1
-                     clicked_idx = st.scroll + row_offset
-                     clicked_idx < ?st.entries |
-                        clicked_idx == st.selected
-                           |
-                              ent = st.entries(clicked_idx)!!
-                              ent.is_dir |
-                                 vade::set_dir(st, fs::join_path(st.path, ent.name))
-                           |
-                              st.selected = clicked_idx
-                              st.preview_scroll = 0
-                        vade::draw(t, st)
+                  !st.full_preview && (!lay.has_right || click_x < split_c) |
+                     click_y [1...lay.list_h] |
+                        row_offset = click_y - 1
+                        clicked_idx = st.scroll + row_offset
+                        clicked_idx < ?st.entries |
+                           clicked_idx == st.selected
+                              |
+                                 ent = st.entries(clicked_idx)!!
+                                 ent.is_dir |
+                                    vade::set_dir(st, fs::join_path(st.path, ent.name))
+                              |
+                                 st.selected = clicked_idx
+                                 st.preview_scroll = 0
+                           vade::draw(t, st)
+                     lay.has_bottom && click_y > split_r |
+                        hist_slot = click_y - (split_r + 1)
+                        max_hist = %min(?st.history, %min(5, lay.bottom_h))
+                        hist_slot [0..max_hist] |
+                           vade::jump_history(st, hist_slot)
+                           vade::draw(t, st)
 
          [term::EV_RESIZE]
             vade::draw(t, st)
