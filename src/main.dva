@@ -29,7 +29,7 @@ edit_file: term::Term, vade::State, String => ()
 edit_file = t, st, full_path =>
    term::disable_raw(t)
    term::show_cursor(t)
-   libc::system("COLORTERM=\${COLORTERM:-truecolor} \${EDITOR:-nano} \"" + full_path + "\"")
+   libc::system("COLORTERM=\${COLORTERM:-truecolor} \${EDITOR:-vi} \"" + full_path + "\"")
    term::enable_raw(t)
    term::enable_mouse(t)
    term::hide_cursor(t)
