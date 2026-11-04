@@ -4,9 +4,11 @@ edva = 1.4.7
 
 dependencies =
   term =
-    path = ../term
+    git = https://github.com/edva-lang/term.git
+    rev = master
   syntax =
-    path = ../syntax
+    git = https://github.com/edva-lang/syntax.git
+    rev = master
 
 targets =
   vade =
