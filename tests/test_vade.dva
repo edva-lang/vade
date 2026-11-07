@@ -111,6 +111,12 @@ main = !=>
    vade::toggle_history_lock(st, 0)
    assert((st.history_locks .&. 1) != 0, "slot 0 locked")
    vade::set_dir(st, d3)
+   // Going up to parent directory (`root`) positions selector on `dir3` (index 2), not index 0 (`dir1`)
+   vade::set_dir(st, fs::parent_path(st.path))
+   assert(st.path == fs::resolve_path(root), "navigated up to parent root")
+   assert(st.entries(st.selected)!!.name == "dir3", "updir positions selector bar on dir3")
+   assert(st.selected == 2, "updir selected index is 2 (dir3)")
+
    vade::jump_history(st, 0)
    assert(st.path == fs::resolve_path(d1), "jumped back to history slot 0")
 

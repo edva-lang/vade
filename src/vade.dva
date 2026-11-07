@@ -4,6 +4,7 @@
 #use path
 #use str
 #use ascii
+#use utf
 #use @term
 #use @syntax
 #use @syntax/token
@@ -198,8 +199,10 @@
       real_p = fs::resolve_path(new_p)
       real_p == st.path | --|
       old_p = st.path
+      child_name = fs::parent_path(old_p) == real_p | path::base(old_p) | ""
       st.prev_path = old_p
       st.path = real_p
+      st.entries = fs::Entry{}
       st.filter_str = ""
       st.selected = 0
       st.scroll = 0
@@ -207,6 +210,11 @@
       st.last_jump_key = -1
       push_history(st, old_p)
       reload_dir(st)
+      child_name != "" |
+         ?st.entries @ i =>
+            st.entries(i)!!.name == child_name |
+               st.selected = i
+               -->
 
    go_home: State => ()
    go_home = st =>
@@ -250,7 +258,7 @@
    abbrev_path = p =>
       h = fs::get_home!
       hlen = ?h
-      hlen > 1 && ?p !< hlen && p(..hlen) == h
+      hlen > 1 && str::starts_with(p, h)
          | "~" + p(hlen..)
          | p
 
@@ -295,66 +303,9 @@
       [SORT_EXT] "ext"
       | "name"
 
-   trim_str: String => String
-   trim_str = s =>
-      len = ?s
-      len == 0 | --| ""
-      start' = 0
-      len @ i =>
-         s(i) == ' ' && start' == i | start' = i + 1
-      start' !< len | --| ""
-      end' = len
-      len @ j =>
-         idx = len - 1 - j
-         s(idx) == ' ' && end' == idx + 1 | end' = idx
-      s(start'..end')
-
-   to_lower_byte: Int => Int
-   to_lower_byte = b =>
-      b [65...90] | b + 32 | b
-
    match_substring_ci: String, String => <>
    match_substring_ci = haystack, needle =>
-      hlen = ?haystack
-      nlen = ?needle
-      nlen == 0 | --| <+>
-      nlen > hlen | --| <->
-      max_start = hlen - nlen
-      found' = <->
-      (max_start + 1) @ i =>
-         match' = <+>
-         nlen @ j =>
-            hb = to_lower_byte(haystack(i + j))
-            nb = to_lower_byte(needle(j))
-            hb != nb |
-               match' = <->
-               -->
-         match' |
-            found' = <+>
-            -->
-      found'
-
-   prev_char_pos: String, Int => Int
-   prev_char_pos = s, pos =>
-      pos !> 0 | --| 0
-      p' = pos - 1
-      0..3 @
-         p' !> 0 | -->
-         (s(p') .&. 0xC0) == 0x80 | p' = p' - 1
-         | -->
-      %max(0, p')
-
-   next_char_pos: String, Int => Int
-   next_char_pos = s, pos =>
-      len = ?s
-      pos !< len | --| len
-      b = s(pos)
-      step' = 1
-      (b .&. 0x80) == 0 | step' = 1
-      (b .&. 0xE0) == 0xC0 | step' = 2
-      (b .&. 0xF0) == 0xE0 | step' = 3
-      (b .&. 0xF8) == 0xF0 | step' = 4
-      %min(len, pos + step')
+      str::contains(str::lower(haystack), str::lower(needle))
 
    reload_dir: State => ()
    reload_dir = st =>
@@ -587,12 +538,7 @@
 
    format_file_arg: String => String
    format_file_arg = name =>
-      has_space' = <->
-      ?name @ i =>
-         name(i) == ' ' |
-            has_space' = <+>
-            -->
-      has_space' | "\"" + name + "\"" | name
+      str::contains(name, " ") | "\"" + name + "\"" | name
 
    insert_hovered_name: State => ()
    insert_hovered_name = st =>
@@ -621,7 +567,7 @@
    prompt_backspace = st =>
       cur = %clamp(st.input_cursor, 0, ?st.input_buf)
       cur !> 0 | --| <->
-      prev = prev_char_pos(st.input_buf, cur)
+      prev = utf::prev_start(st.input_buf, cur)
       st.input_buf = st.input_buf(..prev) + st.input_buf(cur..)
       st.input_cursor = prev
       <+>
@@ -630,17 +576,17 @@
    prompt_delete = st =>
       cur = %clamp(st.input_cursor, 0, ?st.input_buf)
       cur !< ?st.input_buf | --| <->
-      nxt = next_char_pos(st.input_buf, cur)
+      nxt = utf::next_start(st.input_buf, cur)
       st.input_buf = st.input_buf(..cur) + st.input_buf(nxt..)
       <+>
 
    prompt_move_left: State => ()
    prompt_move_left = st =>
-      st.input_cursor = prev_char_pos(st.input_buf, st.input_cursor)
+      st.input_cursor = utf::prev_start(st.input_buf, st.input_cursor)
 
    prompt_move_right: State => ()
    prompt_move_right = st =>
-      st.input_cursor = next_char_pos(st.input_buf, st.input_cursor)
+      st.input_cursor = utf::next_start(st.input_buf, st.input_cursor)
 
    prompt_home: State => ()
    prompt_home = st =>
@@ -652,10 +598,10 @@
 
    resolve_nav_path: State, String => String
    resolve_nav_path = st, input_p =>
-      p = trim_str(input_p)
+      p = str::trim(input_p)
       p == "" || p == "~" | --| fs::get_home!
       p == "-" | --| (st.prev_path != "" | st.prev_path | st.path)
-      ?p !< 2 && p(..2) == "~/" || path::is_abs(p) |
+      str::starts_with(p, "~/") || path::is_abs(p) |
          --| fs::resolve(p)
       fs::resolve(path::join(st.path, p))
 
@@ -758,6 +704,9 @@
    draw_file_list = tm, st, list_r, list_c, list_h, list_w, has_attrs, has_sizes =>
       pal = st.pal
       n_items = ?st.entries
+      st.selected < st.scroll | st.scroll = st.selected
+      list_h > 0 && st.selected !< (st.scroll + list_h) |
+         st.scroll = st.selected - list_h + 1
 
       list_h @ row_idx =>
          entry_idx = st.scroll + row_idx
@@ -1275,7 +1224,7 @@
             cur_col' = cur_col' + 1
       cur < ?buf
          |
-            nxt = next_char_pos(buf, cur)
+            nxt = utf::next_start(buf, cur)
             ch_str = buf(cur..nxt)
             term::put_str(tm, y, cur_col', ch_str, fg, bg, term::ATTR_REVERSE)
             nxt < ?buf |
