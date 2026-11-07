@@ -215,6 +215,14 @@ get_uname_info = !=>
       machine = sys::c_str(&buf + 260)
       (sysname, release, machine)
 
+// Query monotonic clock in milliseconds (CLOCK_MONOTONIC = 1 on Linux, 6 on Darwin)
+now_ms: () => Int
+now_ms = !=>
+   ts = Timespec(0i64, 0i64)
+   clk_id = #! (os ["darwin"] 6 | 1)
+   rc = clock_gettime(clk_id, &ts)
+   rc [0] (Int(ts.sec) * 1000 + Int(ts.nsec) / 1000000) | 0
+
 // Query uptime portably via POSIX clock_gettime (CLOCK_BOOTTIME / CLOCK_MONOTONIC)
 get_uptime_str: () => String
 get_uptime_str = !=>

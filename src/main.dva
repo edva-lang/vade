@@ -7,34 +7,21 @@
 #use str
 #use utf
 #use cli
-#use @term
+#use(import) @term
 #use "vade"
+#use "sysinfo"
 #use fs
 
-trim_str: String => String
-trim_str = s =>
-   len = ?s
-   len == 0 | --| ""
-   start' = 0
-   len @ i =>
-      s(i) == ' ' && start' == i | start' = i + 1
-   start' !< len | --| ""
-   end' = len
-   len @ j =>
-      idx = len - 1 - j
-      s(idx) == ' ' && end' == idx + 1 | end' = idx
-   s(start'..end')
-
-edit_file: term::Term, vade::State, String => ()
+edit_file: Term, vade::State, String => ()
 edit_file = t, st, full_path =>
-   term::disable_raw(t)
-   term::show_cursor(t)
+   disable_raw(t)
+   show_cursor(t)
    libc::system("COLORTERM=\${COLORTERM:-truecolor} \${EDITOR:-vi} \"" + full_path + "\"")
-   term::enable_raw(t)
-   term::enable_mouse(t)
-   term::hide_cursor(t)
-   term::force_redraw(t)
-   vade::apply_theme(st, term::is_dark(t))
+   enable_raw(t)
+   enable_mouse(t)
+   hide_cursor(t)
+   force_redraw(t)
+   vade::apply_theme(st, is_dark(t))
    vade::reload_dir(st)
    vade::draw(t, st)
 
@@ -49,17 +36,31 @@ run = !=>
    picker_file = cli::str(p, "picker-file")
    start_dir = ?p.args > 0 | p.args(0)!! | "."
 
-   t = term::init!
-   term::enable_raw(t)
-   term::enable_mouse(t)
-   term::hide_cursor(t)
+   t = init!
+   enable_raw(t)
+   enable_mouse(t)
+   hide_cursor(t)
 
    st = vade::new_state(start_dir)
-   vade::apply_theme(st, term::is_dark(t))
+   vade::apply_theme(st, is_dark(t))
    vade::draw(t, st)
 
+   last_dir_watch' = sysinfo::now_ms!
+   last_sys_watch' = last_dir_watch'
+
    0.. @
-      ev = term::poll_event(t, 50)
+      ev = poll_event(t, 50)
+      now = sysinfo::now_ms!
+      bg_dirty' = <->
+      (now - last_dir_watch') !< 100 |
+         last_dir_watch' = now
+         vade::poll_dir_watch(st) | bg_dirty' = <+>
+      (now - last_sys_watch') !< 2000 |
+         last_sys_watch' = now
+         vade::refresh_sys_monitor(st) | bg_dirty' = <+>
+      bg_dirty' && (ev.kind [term::EV_NONE]) |
+         vade::draw(t, st)
+
       lay = vade::compute_layout(t.rows, t.cols)
       visible_h = lay.list_h
       split_r = lay.split_r
@@ -153,7 +154,7 @@ run = !=>
                            vade::prompt_delete(st)
                            vade::draw(t, st)
                         [term::KEY_ENTER]
-                           new_name = vade::trim_str(st.input_buf)
+                           new_name = str::trim(st.input_buf)
                            new_name != "" && ?st.entries > 0 |
                               old_ent = st.entries(st.selected)!!
                               old_p = fs::join_path(st.path, old_ent.name)
@@ -193,7 +194,7 @@ run = !=>
                            vade::prompt_delete(st)
                            vade::draw(t, st)
                         [term::KEY_ENTER]
-                           target = vade::trim_str(st.input_buf)
+                           target = str::trim(st.input_buf)
                            target != "" |
                               full_p = fs::join_path(st.path, target)
                               t_len = ?target
@@ -243,56 +244,62 @@ run = !=>
                            vade::insert_hovered_name(st)
                            vade::draw(t, st)
                         [term::KEY_ENTER]
-                           (ev.mods .&. term::MOD_CTRL) != 0
+                           (ev.mods .&. MOD_CTRL) != 0
                               |
                                  vade::insert_hovered_name(st)
                                  vade::draw(t, st)
                               |
-                                 cmd = vade::trim_str(st.input_buf)
+                                 cmd = str::trim(st.input_buf)
                                  st.prompt_mode = vade::PROMPT_NONE
-                                 cmd ["q", "quit", "exit"] | -->
-                                 cmd == "help" | st.show_help = <+>
-                                 cmd ["home", "~"] | vade::go_home(st)
-                                 cmd == "-" | vade::go_prev_dir(st)
-                                 cmd == "theme" | vade::toggle_theme(st)
-                                 cmd ["icons", "glyphs"] | vade::toggle_icons(st)
-                                 cmd == "hidden" | vade::toggle_hidden(st)
-                                 cmd == "clear" | vade::clear_selection(st)
-                                 cmd == "all" | vade::select_all(st)
-                                 cmd ["sort name", "sort n"] | vade::set_sort_mode(st, vade::SORT_NAME)
-                                 cmd ["sort size", "sort s"] | vade::set_sort_mode(st, vade::SORT_SIZE)
-                                 cmd ["sort time", "sort mtime", "sort m"] | vade::set_sort_mode(st, vade::SORT_MTIME)
-                                 cmd ["sort ext", "sort e"] | vade::set_sort_mode(st, vade::SORT_EXT)
-                                 cmd ["sort rev", "rev"] | vade::toggle_sort_rev(st)
-                                 cmd ["dark", "theme dark", "tokyonight"] |
-                                    vade::apply_theme(st, <+>)
-                                    st.status_msg = "Theme: Tokyo Night (Dark)"
-                                 cmd ["light", "theme light", "solarized_light"] |
-                                    vade::apply_theme(st, <->)
-                                    st.status_msg = "Theme: Solarized Light"
-                                 ?cmd !< 3 && cmd(..3) == "cd " |
-                                    target = vade::trim_str(cmd(3..))
-                                    dest = vade::resolve_nav_path(st, target)
-                                    dp = libc::opendir(dest)
-                                    dp == 0
-                                       | st.status_msg = "Cannot open directory: " + target
-                                       |
-                                          libc::closedir(dp)
-                                          vade::set_dir(st, dest)
-                                          st.status_msg = "cd: " + vade::abbrev_path(dest)
-                                 ?cmd !< 6 && cmd(..6) == "mkdir " |
-                                    dname = vade::trim_str(cmd(6..))
-                                    full_p = fs::join_path(st.path, dname)
-                                    fs::create_dir(full_p)
-                                    vade::reload_dir(st)
-                                    st.status_msg = "Created directory: " + dname
-                                 ?cmd !< 6 && cmd(..6) == "touch " |
-                                    fname = vade::trim_str(cmd(6..))
-                                    full_p = fs::join_path(st.path, fname)
-                                    fs::create_file(full_p)
-                                    vade::reload_dir(st)
-                                    st.status_msg = "Created file: " + fname
-                                 cmd == "" | st.status_msg = ""
+                                 cmd
+                                    ["q", "quit", "exit"] -->
+                                    ["help"] st.show_help = <+>
+                                    ["home", "~"] vade::go_home(st)
+                                    ["-"] vade::go_prev_dir(st)
+                                    ["theme"] vade::toggle_theme(st)
+                                    ["icons", "glyphs"] vade::toggle_icons(st)
+                                    ["hidden"] vade::toggle_hidden(st)
+                                    ["clear"] vade::clear_selection(st)
+                                    ["all"] vade::select_all(st)
+                                    ["sort name", "sort n"]
+                                       vade::set_sort_mode(st, vade::SORT_NAME)
+                                    ["sort size", "sort s"]
+                                       vade::set_sort_mode(st, vade::SORT_SIZE)
+                                    ["sort time", "sort mtime", "sort m"]
+                                       vade::set_sort_mode(st, vade::SORT_MTIME)
+                                    ["sort ext", "sort e"]
+                                       vade::set_sort_mode(st, vade::SORT_EXT)
+                                    ["sort rev", "rev"]
+                                       vade::toggle_sort_rev(st)
+                                    ["dark", "theme dark", "tokyonight"]
+                                       vade::apply_theme(st, <+>)
+                                       st.status_msg = "Theme: Tokyo Night (Dark)"
+                                    ["light", "theme light", "solarized_light"]
+                                       vade::apply_theme(st, <->)
+                                       st.status_msg = "Theme: Solarized Light"
+                                    [(str::starts_with(_, "cd "))]
+                                       target = str::trim(cmd(3..))
+                                       dest = vade::resolve_nav_path(st, target)
+                                       dp = libc::opendir(dest)
+                                       dp == 0
+                                          | st.status_msg = "Cannot open directory: " + target
+                                          |
+                                             libc::closedir(dp)
+                                             vade::set_dir(st, dest)
+                                             st.status_msg = "cd: " + vade::abbrev_path(dest)
+                                    [(str::starts_with(_, "mkdir "))]
+                                       dname = str::trim(cmd(6..))
+                                       full_p = fs::join_path(st.path, dname)
+                                       fs::create_dir(full_p)
+                                       vade::reload_dir(st)
+                                       st.status_msg = "Created directory: " + dname
+                                    [(str::starts_with(_, "touch "))]
+                                       fname = str::trim(cmd(6..))
+                                       full_p = fs::join_path(st.path, fname)
+                                       fs::create_file(full_p)
+                                       vade::reload_dir(st)
+                                       st.status_msg = "Created file: " + fname
+                                    [""] st.status_msg = ""
                                  vade::draw(t, st)
                         [term::KEY_CHAR]
                            ch_s = ev.ch < 128 | str::from_byte(ev.ch) | utf::encode_codepoint(ev.ch)
@@ -332,16 +339,16 @@ run = !=>
                            vade::insert_hovered_name(st)
                            vade::draw(t, st)
                         [term::KEY_ENTER]
-                           (ev.mods .&. term::MOD_CTRL) != 0
+                           (ev.mods .&. MOD_CTRL) != 0
                               |
                                  vade::insert_hovered_name(st)
                                  vade::draw(t, st)
                               |
-                                 cmd = vade::trim_str(st.input_buf)
+                                 cmd = str::trim(st.input_buf)
                                  st.prompt_mode = vade::PROMPT_NONE
                                  cmd != "" |
-                                    term::disable_raw(t)
-                                    term::show_cursor(t)
+                                    disable_raw(t)
+                                    show_cursor(t)
                                     shell_cmd = "cd \"" + st.path + "\" && " + cmd
                                     libc::system(shell_cmd)
                                     msg = "\n\e[33m[Press any key to return to vade]\e[0m"
@@ -349,11 +356,11 @@ run = !=>
                                     libc::tcsetattr(0, 0, t.raw_termios)
                                     pause_buf = {8}
                                     libc::read(0, &pause_buf, 1)
-                                    term::enable_raw(t)
-                                    term::enable_mouse(t)
-                                    term::hide_cursor(t)
-                                    term::force_redraw(t)
-                                    vade::apply_theme(st, term::is_dark(t))
+                                    enable_raw(t)
+                                    enable_mouse(t)
+                                    hide_cursor(t)
+                                    force_redraw(t)
+                                    vade::apply_theme(st, is_dark(t))
                                     vade::reload_dir(st)
                                  vade::draw(t, st)
                         [term::KEY_CHAR]
@@ -393,12 +400,12 @@ run = !=>
                            vade::insert_hovered_name(st)
                            vade::draw(t, st)
                         [term::KEY_ENTER]
-                           (ev.mods .&. term::MOD_CTRL) != 0
+                           (ev.mods .&. MOD_CTRL) != 0
                               |
                                  vade::insert_hovered_name(st)
                                  vade::draw(t, st)
                               |
-                                 target = vade::trim_str(st.input_buf)
+                                 target = str::trim(st.input_buf)
                                  st.prompt_mode = vade::PROMPT_NONE
                                  dest = vade::resolve_nav_path(st, target)
                                  dp = libc::opendir(dest)
@@ -623,7 +630,7 @@ run = !=>
                         vade::go_prev_dir(st)
                         vade::draw(t, st)
                      ['1'...'5']
-                        (ev.mods .&. term::MOD_CTRL) != 0
+                        (ev.mods .&. MOD_CTRL) != 0
                            | vade::toggle_history_lock(st, ev.ch - '1')
                            | vade::jump_history(st, ev.ch - '1')
                         vade::draw(t, st)
@@ -706,7 +713,7 @@ run = !=>
                [term::KEY_F10] -->
 
                [term::KEY_UP]
-                  st.full_preview || (ev.mods .&. term::MOD_SHIFT) != 0 || (ev.mods .&. term::MOD_ALT) != 0
+                  st.full_preview || (ev.mods .&. MOD_SHIFT) != 0 || (ev.mods .&. MOD_ALT) != 0
                      |
                         st.preview_scroll = %max(st.preview_scroll - 1, 0)
                         vade::draw(t, st)
@@ -715,7 +722,7 @@ run = !=>
                         vade::draw(t, st)
 
                [term::KEY_DOWN]
-                  st.full_preview || (ev.mods .&. term::MOD_SHIFT) != 0 || (ev.mods .&. term::MOD_ALT) != 0
+                  st.full_preview || (ev.mods .&. MOD_SHIFT) != 0 || (ev.mods .&. MOD_ALT) != 0
                      |
                         st.preview_scroll = st.preview_scroll + 1
                         vade::draw(t, st)
@@ -848,7 +855,7 @@ run = !=>
             vade::draw(t, st)
 
          [term::EV_THEME]
-            vade::apply_theme(st, term::is_dark(t))
+            vade::apply_theme(st, is_dark(t))
             vade::draw(t, st)
 
    cwd_file != "" |
@@ -859,10 +866,11 @@ run = !=>
          p_cart' = p_cart' + it.path + "\n"
       fs::write_text_file(picker_file, p_cart')
 
-   term::disable_mouse(t)
-   term::disable_raw(t)
-   term::show_cursor(t)
-   term::shutdown(t)
+   vade::close_watcher(st)
+   disable_mouse(t)
+   disable_raw(t)
+   show_cursor(t)
+   shutdown(t)
    io::out $ "vade exited cleanly.\n"
 
 run!

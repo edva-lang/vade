@@ -119,6 +119,7 @@ main = !=>
 
    vade::jump_history(st, 0)
    assert(st.path == fs::resolve_path(d1), "jumped back to history slot 0")
+   vade::close_watcher(st)
 
    fs::remove_all(root)
 
@@ -167,8 +168,38 @@ main = !=>
 
    assert(st2.prompt_mode == vade::PROMPT_NONE, "all conflicts resolved")
    assert(fs::is_file(fs::join(dst_dir, "a (1).txt")), "auto-renamed file 'a (1).txt' created")
+   vade::close_watcher(st2)
 
    fs::remove_all(ops_root)
+
+   // --- 5. Near-realtime directory watch & system monitor snapshot -----------
+   watch_dir = "/tmp/vade_test_watch"
+   fs::remove_all(watch_dir)
+   fs::create_dir_all(watch_dir)
+   fs::write_file(fs::join(watch_dir, "init.txt"), "one")
+
+   st_w = vade::new_state(watch_dir)
+   assert(?st_w.entries == 1, "watch_dir starts with 1 entry")
+   assert(!vade::poll_dir_watch(st_w), "poll_dir_watch is false when directory is unchanged")
+
+   // External file creation detected without manual reload_dir
+   fs::write_file(fs::join(watch_dir, "added.txt"), "two")
+   assert(vade::poll_dir_watch(st_w), "poll_dir_watch detects newly created file")
+   assert(?st_w.entries == 2, "watch_dir automatically reloaded to 2 entries")
+
+   // External file removal detected without manual reload_dir
+   fs::remove_all(fs::join(watch_dir, "init.txt"))
+   assert(vade::poll_dir_watch(st_w), "poll_dir_watch detects removed file")
+   assert(?st_w.entries == 1 && st_w.entries(0)!!.name == "added.txt", "watch_dir automatically updated after removal")
+
+   // System monitor snapshot populated and refreshable
+   vade::refresh_sys_monitor(st_w)
+   assert(st_w.sys_mon.load_cpus !< 1, "sys_mon load_cpus >= 1")
+   assert(?st_w.sys_mon.uptime_str > 0, "sys_mon uptime_str non-empty")
+   assert(sysinfo::now_ms! > 0, "monotonic now_ms > 0")
+
+   vade::close_watcher(st_w)
+   fs::remove_all(watch_dir)
    test::summary!
 
 main!

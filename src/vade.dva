@@ -13,6 +13,49 @@
 #use "preview"
 #use "sysinfo"
 
+#foreign "c"
+   c_inotify_init1 = inotify_init1: (flags: Int) => Int
+   c_inotify_add_watch = inotify_add_watch: (fd: Int, pathname: String, mask: u32) => Int
+   c_inotify_rm_watch = inotify_rm_watch: (fd: Int, wd: Int) => Int
+
+#private
+   #type WatchPlatPosix (posix: Int, tag: Int)
+   #type WatchPlatLinux (linux: Int, tag: Int)
+   #type WatchPlat #! (os ["darwin", "freebsd", "openbsd", "netbsd", "wasm", "wasi"] WatchPlatPosix | WatchPlatLinux)
+
+   // IN_NONBLOCK (0x800) | IN_CLOEXEC (0x80000) = 526336
+   watch_init_os: #! OS: Type, Int => Int
+   watch_init_os = #! OS, flags =>
+      OS
+         [WatchPlatLinux] c_inotify_init1(flags)
+         | -1
+
+   // Watch mask: IN_MODIFY(2) | IN_ATTRIB(4) | IN_CLOSE_WRITE(8) | IN_MOVED_FROM(64)
+   //           | IN_MOVED_TO(128) | IN_CREATE(256) | IN_DELETE(512) | IN_DELETE_SELF(1024) | IN_MOVE_SELF(2048) = 4046
+   watch_add_os: #! OS: Type, Int, String => Int
+   watch_add_os = #! OS, fd, dir_path =>
+      OS
+         [WatchPlatLinux] (fd < 0 | -1 | c_inotify_add_watch(fd, dir_path, 4046u32))
+         | -1
+
+   watch_rm_os: #! OS: Type, Int, Int => Int
+   watch_rm_os = #! OS, fd, wd =>
+      OS
+         [WatchPlatLinux] ((fd !< 0 && wd !< 0) | c_inotify_rm_watch(fd, wd) | 0)
+         | 0
+
+   drain_watch_fd: Int => <>
+   drain_watch_fd = fd =>
+      fd < 0 | --| <->
+      buf = {4096}
+      fired' = <->
+      0.. @
+         n = libc::read(fd, &buf, 4096)
+         n > 0
+            | fired' = <+>
+            | -->
+      fired'
+
 #public
    PROMPT_NONE   = 0
    PROMPT_RENAME = 1
@@ -84,6 +127,51 @@
       fmt_size: String
    )
 
+   #type SysMonitor (
+      disk_pct: Int,
+      disk_free_gb: Int,
+      mem_pct: Int,
+      mem_used: String,
+      mem_tot: String,
+      load_str: String,
+      load_high: <>,
+      load_cpus: Int,
+      net_str: String,
+      uptime_str: String,
+      host_str: String,
+      os_str: String,
+      cpu_str: String
+   )
+
+   build_sys_monitor: String, String, String, String => SysMonitor
+   build_sys_monitor = dir_path, cached_host, cached_os, cached_cpu =>
+      fstat = fs::get_fs_stats(dir_path)
+      mem = sysinfo::get_mem_info!
+      load = sysinfo::get_loadavg_info!
+      ip = sysinfo::get_local_ip!
+      iface = sysinfo::get_default_iface!
+      host = ?cached_host > 0 | cached_host | sysinfo::get_hostname!
+      os_str = ?cached_os > 0 | cached_os | sysinfo::get_os_kernel_str!
+      cpu_str = ?cached_cpu > 0 | cached_cpu | sysinfo::get_cpu_model!
+      target = ?iface > 0 | "${ip} (${iface})" | ip
+      net_str = ?host > 0 | "${target}  •  ${host}" | target
+      uptime = sysinfo::get_uptime_str!
+      SysMonitor(
+         fstat.2,
+         fstat.3,
+         mem.0,
+         mem.1,
+         mem.2,
+         load.0,
+         load.1,
+         load.2,
+         net_str,
+         uptime,
+         host,
+         os_str,
+         cpu_str
+      )
+
    #type State (
       path: String,
       entries: fs::Entry{},
@@ -112,7 +200,11 @@
       startup_hint: <>,
       conflict_idx: Int,
       conflict_src: String,
-      conflict_dst: String
+      conflict_dst: String,
+      watch_fd: Int,
+      watch_wd: Int,
+      dir_mtime: Int,
+      sys_mon: SysMonitor
    )
 
    new_state: String => State
@@ -120,6 +212,10 @@
       real_p = fs::resolve_path(dir_path)
       ents = fs::list_dir(real_p, <->, SORT_NAME, <->)
       hist = String{}
+      wfd = watch_init_os(WatchPlat, 526336)
+      wwd = watch_add_os(WatchPlat, wfd, real_p)
+      dmtime = fs::path_mtime(real_p)
+      smon = build_sys_monitor(real_p, "", "", "")
       State(
          real_p,
          ents,
@@ -148,7 +244,11 @@
          <+>,
          -1,
          "",
-         ""
+         "",
+         wfd,
+         wwd,
+         dmtime,
+         smon
       )
 
    apply_theme: State, <> => ()
@@ -202,6 +302,12 @@
       child_name = fs::parent_path(old_p) == real_p | path::base(old_p) | ""
       st.prev_path = old_p
       st.path = real_p
+      watch_rm_os(WatchPlat, st.watch_fd, st.watch_wd)
+      st.watch_wd = watch_add_os(WatchPlat, st.watch_fd, real_p)
+      drain_watch_fd(st.watch_fd)
+      fstat = fs::get_fs_stats(real_p)
+      st.sys_mon.disk_pct = fstat.2
+      st.sys_mon.disk_free_gb = fstat.3
       st.entries = fs::Entry{}
       st.filter_str = ""
       st.selected = 0
@@ -311,6 +417,8 @@
    reload_dir = st =>
       cur_name = ?st.entries > 0 | st.entries(st.selected)!!.name | ""
       all_entries = fs::list_dir(st.path, st.show_hidden, st.sort_mode, st.sort_rev)
+      st.dir_mtime = fs::path_mtime(st.path)
+      drain_watch_fd(st.watch_fd)
       st.filter_str != ""
          |
             filtered = fs::Entry{}
@@ -337,6 +445,63 @@
          | st.selected = %clamp(st.selected, 0, n - 1)
       st.scroll = %clamp(st.scroll, 0, %max(0, n - 1))
       st.selected < st.scroll | st.scroll = st.selected
+
+   // Poll inotify / stat fallback for near-realtime current directory updates.
+   // Returns <+> when directory contents changed and a redraw is needed.
+   poll_dir_watch: State => <>
+   poll_dir_watch = st =>
+      dp = libc::opendir(st.path)
+      dp == 0
+         |
+            // Current directory was removed externally; walk up to nearest existing parent
+            cur' = fs::parent_path(st.path)
+            16 @
+               p_dp = libc::opendir(cur')
+               p_dp != 0
+                  |
+                     libc::closedir(p_dp)
+                     -->
+                  |
+                     next_p = fs::parent_path(cur')
+                     next_p == cur' | -->
+                     cur' = next_p
+            set_dir(st, cur')
+            st.status_msg = "Directory removed; moved to " + abbrev_path(st.path)
+            <+>
+         |
+            libc::closedir(dp)
+            fired = drain_watch_fd(st.watch_fd)
+            cur_mtime = fs::path_mtime(st.path)
+            mtime_changed = cur_mtime != st.dir_mtime
+            fired || mtime_changed
+               |
+                  reload_dir(st)
+                  <+>
+               | <->
+
+   // Refresh dynamic system monitor telemetry; returns <+> if any displayed value changed.
+   refresh_sys_monitor: State => <>
+   refresh_sys_monitor = st =>
+      prev = st.sys_mon
+      next = build_sys_monitor(st.path, prev.host_str, prev.os_str, prev.cpu_str)
+      changed = (next.disk_pct != prev.disk_pct ||
+         next.disk_free_gb != prev.disk_free_gb ||
+         next.mem_pct != prev.mem_pct ||
+         next.mem_used != prev.mem_used ||
+         next.mem_tot != prev.mem_tot ||
+         next.load_str != prev.load_str ||
+         next.load_high != prev.load_high ||
+         next.net_str != prev.net_str ||
+         next.uptime_str != prev.uptime_str)
+      st.sys_mon = next
+      changed
+
+   close_watcher: State => ()
+   close_watcher = st =>
+      watch_rm_os(WatchPlat, st.watch_fd, st.watch_wd)
+      st.watch_fd !< 0 | libc::close(st.watch_fd)
+      st.watch_fd = -1
+      st.watch_wd = -1
 
    set_sort_mode: State, Int => ()
    set_sort_mode = st, mode =>
@@ -1043,57 +1208,47 @@
             txt = "${label}${pct}% (${detail_str})"
             term::put_str_clipped(tm, r, c, txt, avail_w, pal.fg, pal.bg, 0)
 
-   // Draw curated system information metrics
+   // Draw curated system information metrics from cached SysMonitor snapshot
    draw_sysinfo_rows: term::Term, State, Int, Int, Int, Int => ()
    draw_sysinfo_rows = tm, st, r, c, avail_h, avail_w =>
       avail_w < 6 | --|
       pal = st.pal
+      mon = st.sys_mon
 
       // Row 0: Disk
       avail_h > 0 |
-         fstat = fs::get_fs_stats(st.path)
-         draw_bar(tm, r, c, avail_w, "Disk: ", fstat.2, "${fstat.3}G free", pal, pal.cyan)
+         draw_bar(tm, r, c, avail_w, "Disk: ", mon.disk_pct, "${mon.disk_free_gb}G free", pal, pal.cyan)
 
       // Row 1: Memory
       avail_h > 1 |
-         mem = sysinfo::get_mem_info!
-         draw_bar(tm, r + 1, c, avail_w, "Mem:  ", mem.0, "${mem.1} / ${mem.2}", pal, pal.cyan)
+         draw_bar(tm, r + 1, c, avail_w, "Mem:  ", mon.mem_pct, "${mon.mem_used} / ${mon.mem_tot}", pal, pal.cyan)
 
       // Row 2: Load average
       avail_h > 2 |
-         load = sysinfo::get_loadavg_info!
          term::put_str(tm, r + 2, c, "Load: ", pal.fg, pal.bg, 0)
-         col = load.1 | pal.red | pal.fg
-         txt = "${load.0} (${load.2} CPUs)"
+         col = mon.load_high | pal.red | pal.fg
+         txt = "${mon.load_str} (${mon.load_cpus} CPUs)"
          term::put_str_clipped(tm, r + 2, c + 6, txt, %max(avail_w - 6, 0), col, pal.bg, 0)
 
       // Row 3: Network
       avail_h > 3 |
-         ip = sysinfo::get_local_ip!
-         iface = sysinfo::get_default_iface!
-         host = sysinfo::get_hostname!
-         target = ?iface > 0 | "${ip} (${iface})" | ip
-         net_str = ?host > 0 | "${target}  •  ${host}" | target
          term::put_str(tm, r + 3, c, "Net:  ", pal.fg, pal.bg, 0)
-         term::put_str_clipped(tm, r + 3, c + 6, net_str, %max(avail_w - 6, 0), pal.cyan, pal.bg, 0)
+         term::put_str_clipped(tm, r + 3, c + 6, mon.net_str, %max(avail_w - 6, 0), pal.cyan, pal.bg, 0)
 
       // Row 4: Uptime
       avail_h > 4 |
-         uptime = sysinfo::get_uptime_str!
          term::put_str(tm, r + 4, c, "Up:   ", pal.fg, pal.bg, 0)
-         term::put_str_clipped(tm, r + 4, c + 6, uptime, %max(avail_w - 6, 0), pal.fg, pal.bg, 0)
+         term::put_str_clipped(tm, r + 4, c + 6, mon.uptime_str, %max(avail_w - 6, 0), pal.fg, pal.bg, 0)
 
       // Row 5: OS & Kernel
       avail_h > 5 |
-         os_str = sysinfo::get_os_kernel_str!
          term::put_str(tm, r + 5, c, "OS:   ", pal.fg, pal.bg, 0)
-         term::put_str_clipped(tm, r + 5, c + 6, os_str, %max(avail_w - 6, 0), pal.purple, pal.bg, 0)
+         term::put_str_clipped(tm, r + 5, c + 6, mon.os_str, %max(avail_w - 6, 0), pal.purple, pal.bg, 0)
 
       // Row 6: CPU Model
       avail_h > 6 |
-         cpu = sysinfo::get_cpu_model!
          term::put_str(tm, r + 6, c, "CPU:  ", pal.fg, pal.bg, 0)
-         term::put_str_clipped(tm, r + 6, c + 6, cpu, %max(avail_w - 6, 0), pal.muted, pal.bg, 0)
+         term::put_str_clipped(tm, r + 6, c + 6, mon.cpu_str, %max(avail_w - 6, 0), pal.muted, pal.bg, 0)
 
    // Draw Bottom-Right (BR): System Monitor & Operations
    draw_monitor: term::Term, State, Int, Int, Int, Int => ()
