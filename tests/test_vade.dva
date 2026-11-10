@@ -4,10 +4,10 @@
 #use fs
 #use str
 #use @term
-#use "../src/vade"
-#use "../src/icon"
-#use "../src/preview"
-#use "../src/sysinfo"
+#use ../src/vade
+#use ../src/icon
+#use ../src/preview
+#use ../src/sysinfo
 
 assert: <>, String => ()
 assert = cond, msg =>
@@ -160,11 +160,11 @@ main = !=>
    vade::start_paste_op(st2)
 
    assert(st2.prompt_mode == vade::PROMPT_CONFLICT, "conflict 1 triggered (pkg)")
-   vade::resolve_conflict(st2, 's') // skip pkg
+   vade::resolve_conflict(st2, 's) // skip pkg
    assert(st2.prompt_mode == vade::PROMPT_CONFLICT, "conflict 2 triggered (a.txt)")
-   vade::resolve_conflict(st2, 'a') // auto-rename a.txt -> a (1).txt
+   vade::resolve_conflict(st2, 'a) // auto-rename a.txt -> a (1).txt
    assert(st2.prompt_mode == vade::PROMPT_CONFLICT, "conflict 3 triggered (b.txt)")
-   vade::resolve_conflict(st2, 'o') // overwrite b.txt
+   vade::resolve_conflict(st2, 'o) // overwrite b.txt
 
    assert(st2.prompt_mode == vade::PROMPT_NONE, "all conflicts resolved")
    assert(fs::is_file(fs::join(dst_dir, "a (1).txt")), "auto-renamed file 'a (1).txt' created")

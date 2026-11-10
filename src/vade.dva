@@ -9,9 +9,9 @@
 #use @syntax
 #use @syntax/token
 #use fs
-#use "icon"
-#use "preview"
-#use "sysinfo"
+#use ./icon
+#use ./preview
+#use ./sysinfo
 
 #foreign "c"
    c_inotify_init1 = inotify_init1: (flags: Int) => Int
@@ -642,15 +642,15 @@
       dst = st.conflict_dst
 
       choice
-         ['o', 'O']
+         ['o, 'O]
             execute_paste_item(st, idx, dst, <+>)
-         ['n', 'N']
+         ['n, 'N]
             src_t = fs::path_mtime(src)
             dst_t = fs::path_mtime(dst)
             src_t > dst_t | execute_paste_item(st, idx, dst, <+>)
-         ['s', 'S']
+         ['s, 'S]
             dummy = 0
-         ['a', 'A']
+         ['a, 'A]
             new_dst = fs::auto_rename_path(dst)
             execute_paste_item(st, idx, new_dst, <->)
          |
@@ -711,7 +711,7 @@
       sel_ent = st.entries(st.selected)!!
       arg = format_file_arg(sel_ent.name)
       cur = %clamp(st.input_cursor, 0, ?st.input_buf)
-      sep = (cur > 0 && st.input_buf(cur - 1) != ' ') | " " | ""
+      sep = (cur > 0 && st.input_buf(cur - 1) != '\s) | " " | ""
       to_ins = sep + arg
       st.input_buf = st.input_buf(..cur) + to_ins + st.input_buf(cur..)
       st.input_cursor = cur + ?to_ins
@@ -891,15 +891,15 @@
                      is_active
                         | pal.surface
                         | pal.bg
-               term::fill_rect(tm, y, list_c, 1, list_w, ' ', pal.fg, row_bg, 0)
+               term::fill_rect(tm, y, list_c, 1, list_w, '\s, pal.fg, row_bg, 0)
 
                // Letter shortcut
-               let_ch = 'a' + (entry_idx % 26)
+               let_ch = 'a + (entry_idx % 26)
                let_fg = is_active | pal.yellow | pal.cyan
                term::set_cell(tm, y, list_c, let_ch, let_fg, row_bg, term::ATTR_BOLD)
 
                // Active cursor
-               ptr_ch = is_active | '>' | ' '
+               ptr_ch = is_active | '> | '\s
                term::set_cell(tm, y, list_c + 2, ptr_ch, pal.yellow, row_bg, term::ATTR_BOLD)
 
                // Icon & Name
@@ -907,7 +907,7 @@
                st.show_icons |
                   ic = icon::get_icon(ent.name, ent.is_dir, ent.is_exec, pal)
                   term::set_cell(tm, y, list_c + 4, Int(ic.sym), ic.color, row_bg, 0)
-                  term::set_cell(tm, y, list_c + 5, ' ', pal.fg, row_bg, 0)
+                  term::set_cell(tm, y, list_c + 5, '\s, pal.fg, row_bg, 0)
                   name_x' = list_c + 6
 
                // Suffix widths
@@ -947,7 +947,7 @@
                   sz_x > (name_x' + 4) |
                      term::put_str(tm, y, sz_x, sz_str, pal.muted, row_bg, 0)
             |
-               term::fill_rect(tm, y, list_c, 1, list_w, ' ', pal.fg, pal.bg, 0)
+               term::fill_rect(tm, y, list_c, 1, list_w, '\s, pal.fg, pal.bg, 0)
 
    hex_byte_fg: term::Palette, Int => Int
    hex_byte_fg = pal, val =>
@@ -995,7 +995,7 @@
             // Space padding for right-aligning block number
             pad_len @ p =>
                cur_x' < max_x |
-                  term::set_cell(tm, y, cur_x', ' ', pal.muted, pal.bg, 0)
+                  term::set_cell(tm, y, cur_x', '\s, pal.muted, pal.bg, 0)
                   cur_x' = cur_x' + 1
 
             // Block number
@@ -1020,13 +1020,13 @@
                         b_fg = hex_byte_fg(pal, val)
                         term::set_cell(tm, y, cur_x', ascii::hex_char_lower(hi), b_fg, pal.bg, 0)
                         term::set_cell(tm, y, cur_x' + 1, ascii::hex_char_lower(lo), b_fg, pal.bg, 0)
-                        term::set_cell(tm, y, cur_x' + 2, ' ', pal.fg, pal.bg, 0)
+                        term::set_cell(tm, y, cur_x' + 2, '\s, pal.fg, pal.bg, 0)
                         cur_x' = cur_x' + 3
                      |
                         term::put_str(tm, y, cur_x', "   ", pal.fg, pal.bg, 0)
                         cur_x' = cur_x' + 3
                i == 7 && cur_x' < max_x |
-                  term::set_cell(tm, y, cur_x', ' ', pal.fg, pal.bg, 0)
+                  term::set_cell(tm, y, cur_x', '\s, pal.fg, pal.bg, 0)
                   cur_x' = cur_x' + 1
 
             // Divider before ASCII
@@ -1041,7 +1041,7 @@
                   val = buf(idx)
                   is_print = val [32...126]
                   b_fg = hex_byte_fg(pal, val)
-                  rn = is_print | val | '.'
+                  rn = is_print | val | '.
                   term::set_cell(tm, y, cur_x', rn, b_fg, pal.bg, 0)
                   cur_x' = cur_x' + 1
 
@@ -1051,7 +1051,7 @@
       pal = st.pal
 
       // Clear the entire preview pane rectangle upfront
-      term::fill_rect(tm, prev_r, prev_c, prev_h, prev_w, ' ', pal.fg, pal.bg, 0)
+      term::fill_rect(tm, prev_r, prev_c, prev_h, prev_w, '\s, pal.fg, pal.bg, 0)
 
       n_items = ?st.entries
       n_items == 0 |
@@ -1106,7 +1106,7 @@
    draw_cart = tm, st, cart_r, cart_c, cart_h, cart_w =>
       pal = st.pal
       cart_h @ row_idx =>
-         term::fill_rect(tm, cart_r + row_idx, cart_c, 1, cart_w, ' ', pal.fg, pal.bg, 0)
+         term::fill_rect(tm, cart_r + row_idx, cart_c, 1, cart_w, '\s, pal.fg, pal.bg, 0)
 
       // 1. Visited directories history (up to 5 entries)
       n_hist = ?st.history
@@ -1132,7 +1132,7 @@
          unit_str = n_sel == 1 | " file (" | " files ("
          sel_str = " ★ " + str::from_int(n_sel) + unit_str + fs::format_size(tot_bytes', <->) + ") "
          sel_y = cart_r + cart_h - 1
-         term::fill_rect(tm, sel_y, cart_c, 1, cart_w, ' ', pal.fg, pal.surface, 0)
+         term::fill_rect(tm, sel_y, cart_c, 1, cart_w, '\s, pal.fg, pal.surface, 0)
          term::put_str_clipped(tm, sel_y, cart_c + 1, sel_str, cart_w - 2, pal.yellow, pal.surface, term::ATTR_BOLD)
 
    get_file_kind: fs::Entry, String => String
@@ -1200,8 +1200,8 @@
                [> 75] pal.yellow
                | bar_fg
 
-            fw > 0 | term::draw_hline(tm, r, bar_c, fw, ' ', bar_color, pal.bg, term::ATTR_REVERSE)
-            uw > 0 | term::draw_hline(tm, r, bar_c + fw, uw, ' ', pal.muted, pal.bg, 0)
+            fw > 0 | term::draw_hline(tm, r, bar_c, fw, '\s, bar_color, pal.bg, term::ATTR_REVERSE)
+            uw > 0 | term::draw_hline(tm, r, bar_c + fw, uw, '\s, pal.muted, pal.bg, 0)
             rem_w = %max(avail_w - pref_len - gw', 0)
             term::put_str_clipped(tm, r, bar_c + gw', suf', rem_w, pal.fg, pal.bg, 0)
          |
@@ -1255,7 +1255,7 @@
    draw_monitor = tm, st, mon_r, mon_c, mon_h, mon_w =>
       pal = st.pal
       mon_h @ row_idx =>
-         term::fill_rect(tm, mon_r + row_idx, mon_c, 1, mon_w, ' ', pal.fg, pal.bg, 0)
+         term::fill_rect(tm, mon_r + row_idx, mon_c, 1, mon_w, '\s, pal.fg, pal.bg, 0)
 
       avail_w = mon_w - 2
       avail_w < 4 | --|
@@ -1295,7 +1295,7 @@
       left = %max((c - w) / 2, 2)
 
       // Fill background
-      term::fill_rect(tm, top, left, h, w, ' ', pal.fg, pal.surface, 0)
+      term::fill_rect(tm, top, left, h, w, '\s, pal.fg, pal.surface, 0)
       term::draw_titled_box(tm, top, left, h, w, term::BORDER_ROUNDED, "vade Keybindings Help", pal.cyan, pal.surface, pal.yellow)
 
       keys = String{}
@@ -1430,7 +1430,7 @@
       prompt_y = r - 1
       is_cmd_active = st.prompt_mode != PROMPT_NONE
       line_bg = is_cmd_active | pal.surface | pal.bg
-      term::fill_rect(tm, prompt_y, 0, 1, c, ' ', pal.fg, line_bg, 0)
+      term::fill_rect(tm, prompt_y, 0, 1, c, '\s, pal.fg, line_bg, 0)
       st.prompt_mode
          [PROMPT_RENAME]
             draw_input_prompt(tm, prompt_y, c, " Rename: ", st.input_buf, st.input_cursor, pal.yellow, pal.fg, line_bg)

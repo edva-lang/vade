@@ -51,7 +51,7 @@
          // Right-aligned, space-padded block offset
          off_s = str::from_int(off)
          pad_len = %max(0, bw - ?off_s)
-         pad_len @ p_i => b += ' '
+         pad_len @ p_i => b += '\s
          b += off_s + ": "
          // Hex bytes (16 bytes)
          16 @ i =>
@@ -61,7 +61,7 @@
                   val = buf(idx)
                   hi = (val .>. 4) .&. 0x0F
                   lo = val .&. 0x0F
-                  b += (ascii::hex_char_lower(hi), ascii::hex_char_lower(lo), ' ')
+                  b += (ascii::hex_char_lower(hi), ascii::hex_char_lower(lo), '\s)
                |
                   b += "   "
             i == 7 | b += " "
@@ -73,7 +73,7 @@
             idx < len |
                ch = buf(idx)
                is_print = ch [32...126]
-               b += is_print | ch | '.'
+               b += is_print | ch | '.
          b += "|"
          lines += +b
       lines

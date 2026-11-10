@@ -27,14 +27,14 @@ trim = s =>
       start' = 0
       len @ i =>
          s(i)
-            [' ', '\t', '\n', '\r'] (start' == i | start' = i + 1)
+            ['\s, '\t, '\n, '\r] (start' == i | start' = i + 1)
             | -->
       start' !< len | "" |
          end' = len
          len @ j =>
             idx = len - 1 - j
             s(idx)
-               [' ', '\t', '\n', '\r'] (end' == idx + 1 | end' = idx)
+               ['\s, '\t, '\n, '\r] (end' == idx + 1 | end' = idx)
                | -->
          s(start'..end')
 
@@ -76,8 +76,8 @@ parse_int_at = text, start_pos =>
    0.. @
       i' !< tlen | -->
       text(i')
-         [< '0'] i' = i' + 1
-         [< ':'] -->
+         [< '0] i' = i' + 1
+         [< ':] -->
          | i' = i' + 1
    i' !< tlen | (0, i') |
       val' = 0
@@ -85,8 +85,8 @@ parse_int_at = text, start_pos =>
          i' !< tlen | -->
          c = text(i')
          c
-            [< '0'] -->
-            [< ':']
+            [< '0] -->
+            [< ':]
                val' = val' * 10 + (Int(c) - 48)
                i' = i' + 1
             | -->
@@ -246,10 +246,10 @@ get_os_kernel_str = !=>
          pos = find_pos(os_txt, "PRETTY_NAME=", 0)
          os_name' = pos [< 0] ++u.0 |
             start = pos + 12
-            start < ?os_txt && os_txt(start) == '"' | start = start + 1
+            start < ?os_txt && os_txt(start) == '" | start = start + 1
             nl = find_pos(os_txt, "\n", start)
             end = nl [< 0] ?os_txt | nl
-            end > start && os_txt(end - 1) == '"' | end = end - 1
+            end > start && os_txt(end - 1) == '" | end = end - 1
             os_txt(start..end)
          ?u.1 [0] os_name' | "${os_name'}  •  Linux ${u.1}"
       ["Darwin"]
